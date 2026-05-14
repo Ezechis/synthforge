@@ -1,0 +1,250 @@
+n(words) > FILE_CONTEXT_MAX_WORDS:
+            text = " ".join(words[:FILE_CONTEXT_MAX_WORDS]) + " ... [document truncated]"
+        return text.strip()
+
+    except Exception as exc:
+        return f"[Extraction failed for {uploaded_file.name}: {exc}]"
+
+
+# ---------------------------------------------------------------------------
+# Retrieval
+# ---------------------------------------------------------------------------
+
+def hybrid_retrieve(
+    query: str,
+    collection,
+    embed_model,
+    reranker,
+    bm25: BM25Okapi,
+    corpus_chunks: list[str],
+    corpus_metas: list[dict],
+    n_results: int = 20,
+    source_filter: list[str] | None = None,
+) -> list[dict]:
+    """Hybrid BM25 + dense retrieval with cross-encoder reranking."""
+    query_vec = embed_model.encode(query, normalize_embeddings=True).tolist()
+
+    where_clause = None
+    if source_filter:
+        where_clause = (
+            {"source": {"$eq": source_filter[0]}}
+            if len(source_filter) == 1
+            else {"source": {"$in": source_filter}}
+        )
+
+    dense = collection.query(
+        query_embeddings=[query_vec],
+        n_results=min(n_results, collection.count()),
+        where=where_clause,
+        include=["documents", "metadatas", "distances"],
+    )
+
+    bm25_scores = bm25.get_scores(query.lower().split())
+    top_bm25 = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:n_results]
+
+    seen: set[str] = set()
+    candidates: list[tuple[str, dict]] = []
+    for doc, meta in (
+        list(zip(dense["documents"][0], dense["metadatas"][0]))
+        + [(corpus_chunks[i], corpus_metas[i]) for i in top_bm25]
+    ):
+        key = doc[:100]
+        if key not in seen:
+            seen.add(key)
+            candidates.append((doc, meta))
+
+    if not candidates:
+        return []
+
+    scores = reranker.predict([[query, doc] for doc, _ in candidates])
+    ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)
+
+    return [
+        {"score": float(s), "text": doc, "metadata": meta}
+        for s, (doc, meta) in ranked[:10]
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Generation
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT = """You are PromptForge — a synthesis engine over a curated corpus of prompt engineering knowledge spanning arXiv research papers, GitHub repositories, Reddit practitioner discussions, official documentation, and YouTube transcripts.
+
+CORE DIRECTIVE: Reason only from retrieved context. Never fabricate citations. State explicitly if the corpus is insufficient.
+
+SOURCE HIERARCHY:
+- Tier 1 (Primary): arXiv peer-reviewed papers — highest epistemic weight
+- Tier 2 (Empirical): GitHub, official docs — validated practice
+- Tier 3 (Signal): Reddit, YouTube — practitioner insight, lower confidence
+- USER DOCUMENT: Content uploaded by the user — treat as highest priority for document-specific questions
+
+ANSWER STRUCTURE (follow exactly):
+1. TECHNIQUE DEFINITION — precise, one paragraph
+2. THEORETICAL BASIS — mechanistic explanation
+3. EMPIRICAL EVIDENCE — benchmarks, numbers, cited papers
+4. IMPLEMENTATION EXAMPLE — concrete pseudocode or steps
+5. KNOWN FAILURE MODES — when and why it breaks
+6. SOURCE CITATIONS — every source, with credibility tier
+
+UNCERTAINTY: Label claims as well-established / emerging / speculative as warranted.
+CONTRADICTIONS: Present both positions. Note recency and empirical strength. Never silently resolve.
+REFUSAL: If genuinely insufficient evidence, say so. Do not hallucinate."""
+
+
+def generate_answer(
+    query: str,
+    retrieved_chunks: list[dict],
+    file_context: str = "",
+) -> str:
+    """Synthesise answer from retrieved chunks and optional file context."""
+    groq_key = "".join(os.environ.get("GROQ_API_KEY", "").split())
+    if not groq_key:
+        return "GROQ_API_KEY not set in Space secrets."
+
+    parts: list[str] = []
+    word_count = 0
+
+    if file_context.strip():
+        block = f"[USER DOCUMENT — highest priority]\n{file_context}"
+        parts.append(block)
+        word_count += len(block.split())
+
+    for chunk in retrieved_chunks[:8]:
+        meta = chunk["metadata"]
+        label = (
+            f"[{meta.get('source','?').upper()} | "
+            f"{meta.get('author','N/A')} | "
+            f"{str(meta.get('title',''))[:60]} | "
+            f"credibility: {meta.get('credibility_tier','unknown')}]"
+        )
+        block = f"{label}\n{' '.join(chunk['text'].split()[:300])}"
+        if word_count + len(block.split()) > MAX_CONTEXT_WORDS:
+            break
+        parts.append(block)
+        word_count += len(block.split())
+
+    context = "\n\n---\n\n".join(parts)
+    user_message = f"RETRIEVED CONTEXT:\n\n{context}\n\nQUERY: {query}"
+
+    try:
+        resp = requests.post(
+            GROQ_API_URL,
+            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+            json={
+                "model": GROQ_MODEL,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_message},
+                ],
+                "max_tokens": 1500,
+                "temperature": 0.1,
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+    except requests.exceptions.HTTPError as exc:
+        return f"Groq API error {exc.response.status_code}: {exc.response.text[:200]}"
+    except Exception as exc:
+        return f"Generation error: {exc}"
+
+
+def generate_suggestions(query: str, answer_snippet: str) -> list[str]:
+    """Generate 3 follow-up query suggestions."""
+    groq_key = "".join(os.environ.get("GROQ_API_KEY", "").split())
+    if not groq_key:
+        return []
+    try:
+        resp = requests.post(
+            GROQ_API_URL,
+            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+            json={
+                "model": GROQ_MODEL,
+                "messages": [{"role": "user", "content": (
+                    f"User asked: '{query}'\nAnswer touched on: {answer_snippet[:250]}\n\n"
+                    "Generate exactly 3 prompt-engineering follow-up questions. "
+                    "Return ONLY a JSON array of 3 strings."
+                )}],
+                "max_tokens": 150,
+                "temperature": 0.4,
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+        raw = resp.json()["choices"][0]["message"]["content"].strip()
+        result = json.loads(raw)
+        if isinstance(result, list) and len(result) >= 3:
+            return [str(s) for s in result[:3]]
+    except Exception as exc:
+        logger.warning("Suggestions failed: %s", exc)
+    return []
+
+
+@st.cache_data(ttl=300)
+def fetch_hn_news() -> list[dict]:
+    """Fetch top AI/PE stories from HN. Cached 5 minutes."""
+    try:
+        resp = requests.get(
+            HN_ALGOLIA_URL,
+            params={"query": "prompt engineering LLM AI", "tags": "story",
+                    "numericFilters": "points>30", "hitsPerPage": 4},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return [
+            {
+                "title": h.get("title", "")[:80],
+                "url": h.get("url") or f"https://news.ycombinator.com/item?id={h.get('objectID')}",
+                "points": h.get("points", 0),
+                "comments": h.get("num_comments", 0),
+            }
+            for h in resp.json().get("hits", []) if h.get("title")
+        ]
+    except Exception:
+        return []
+
+
+def compute_source_confidence(results: list[dict]) -> dict:
+    """Compute Tier 1/2/3 breakdown from retrieved chunks."""
+    c = {"primary": 0, "implementation": 0, "community": 0}
+    for r in results:
+        tier = r["metadata"].get("credibility_tier", "community")
+        c[tier] = c.get(tier, 0) + 1
+    n = len(results) or 1
+    return {
+        "tier1": c["primary"], "tier1_pct": round(c["primary"] / n * 100),
+        "tier2": c["implementation"], "tier2_pct": round(c["implementation"] / n * 100),
+        "tier3": c["community"], "tier3_pct": round(c["community"] / n * 100),
+    }
+
+
+# ---------------------------------------------------------------------------
+# UI
+# ---------------------------------------------------------------------------
+
+st.set_page_config(page_title="PromptForge", page_icon="🔥", layout="wide",
+                   initial_sidebar_state="expanded")
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap');
+.main-header { font-family:'Space Mono',monospace; font-size:2.2rem; font-weight:700;
+    color:#FF6B35; letter-spacing:-0.02em; margin-bottom:0.1rem; }
+.sub-header { font-family:'Inter',sans-serif; font-size:0.9rem; color:#666; margin-bottom:1rem; }
+.source-badge { display:inline-block; padding:2px 8px; border-radius:3px; font-size:0.7rem;
+    font-weight:700; font-family:'Space Mono',monospace; margin-right:4px; }
+.arxiv-badge  { background:#B31B1B; color:white; }
+.github-badge { background:#238636; color:white; }
+.reddit-badge { background:#FF4500; color:white; }
+.docs-badge   { background:#0066CC; color:white; }
+.youtube-badge { background:#CC0000; color:white; }
+.confidence-bar-container { margin:8px 0 16px 0; }
+.confidence-label { font-size:0.72rem; font-family:'Space Mono',monospace; color:#888; margin-bottom:2px; }
+.confidence-bar { height:6px; border-radius:3px; margin-bottom:6px; }
+.tier1-bar { background:linear-gradient(90deg,#B31B1B,#e05050); }
+.tier2-bar { background:linear-gradient(90deg,#238636,#4caf50); }
+.tier3-bar { background:linear-gradient(90deg,#FF4500,#ff7043); }
+.suggestion-header { font-family:'Space Mono',monospace; font-size:0.78rem; color:#888;
+    text-transform:uppercase; letter-spacing:0.08em; margin:1.2rem 0 0.5rem 0; }
+.example-label { font-family:'Space Mono',m
