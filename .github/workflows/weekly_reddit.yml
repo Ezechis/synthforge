@@ -1,0 +1,108 @@
+# .github/workflows/weekly_reddit.yml
+# PromptForge — Weekly Reddit Ingestion
+# =======================================
+# Runs every Sunday at 04:00 WAT (03:00 UTC).
+# Replaces the local APScheduler Reddit job entirely.
+# Also triggerable manually from GitHub → Actions → Run workflow.
+#
+# Secrets required in GitHub repo settings:
+#   HF_TOKEN          — Hugging Face write token
+#   HF_DATASET_REPO   — e.g. ezechinnabugwu/promptforge-vectorstore
+#   HF_SPACE_ID       — e.g. ezechinnabugwu/promptforge
+#   REDDIT_CLIENT_ID      — from Reddit app credentials
+#   REDDIT_CLIENT_SECRET  — from Reddit app credentials
+#   REDDIT_USER_AGENT     — e.g. PromptForge/1.0 by Ezeking
+
+name: Weekly Reddit Ingestion
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"   # 03:00 UTC Sunday = 04:00 WAT Sunday
+  workflow_dispatch:        # Manual trigger
+
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  VECTOR_STORE_PATH: data/vector_store
+
+jobs:
+  ingest-reddit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180    # 3-hour cap — Reddit ingestion is faster than arXiv
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements_actions.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Cache embedding model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: ${{ runner.os }}-hf-bge-large-en-v1.5-v1
+          restore-keys: ${{ runner.os }}-hf-bge-large-
+
+      - name: Install Python dependencies
+        run: pip install -r requirements_actions.txt
+
+      - name: Download existing vectorstore from HF Dataset
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+        run: python deploy/download_vectorstore.py
+
+      - name: Run Reddit ingestion (all 4 gates active)
+        env:
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python src/ingestion/ingest_reddit.py
+
+      - name: Embed new chunks (incremental)
+        run: python src/processing/chunk_and_embed.py
+        env:
+          BATCH_SIZE: "32"
+
+      - name: Compress vectorstore
+        run: python deploy/compress_vectorstore.py
+
+      - name: Build BM25 cache
+        run: python deploy/build_bm25_cache.py
+
+      - name: Upload vectorstore to HF Dataset
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+        run: python deploy/upload_vectorstore.py
+
+      - name: Restart HF Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
+        run: |
+          python -c "
+          import os
+          from huggingface_hub import HfApi
+          api = HfApi(token=os.environ['HF_TOKEN'])
+          space_id = os.environ.get('HF_SPACE_ID', 'ezechinnabugwu/promptforge')
+          api.restart_space(repo_id=space_id)
+          print(f'Space restart triggered: {space_id}')
+          "
+
+      - name: Report completion
+        run: |
+          echo "Reddit ingestion complete."
+          echo "Vectorstore uploaded."
+          echo "HF Space restarted."
+          echo "Timestamp: $(date -u)"
