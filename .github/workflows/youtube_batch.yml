@@ -61,6 +61,9 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements_actions.txt
 
+      - name: Create required directories
+        run: mkdir -p logs data/raw data/transcripts data/audio_tmp
+
       - name: Download existing vectorstore
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}

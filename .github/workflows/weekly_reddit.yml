@@ -1,24 +1,22 @@
 # .github/workflows/weekly_reddit.yml
-# PromptForge — Weekly Reddit Ingestion
-# =======================================
+# PromptForge — Weekly Reddit Ingestion (Public JSON API)
+# =========================================================
 # Runs every Sunday at 04:00 WAT (03:00 UTC).
-# Replaces the local APScheduler Reddit job entirely.
-# Also triggerable manually from GitHub → Actions → Run workflow.
+# Uses Reddit public JSON API — zero credentials required.
+# No PRAW, no OAuth, no Reddit API key needed.
 #
-# Secrets required in GitHub repo settings:
-#   HF_TOKEN          — Hugging Face write token
-#   HF_DATASET_REPO   — e.g. ezechinnabugwu/promptforge-vectorstore
-#   HF_SPACE_ID       — e.g. ezechinnabugwu/promptforge
-#   REDDIT_CLIENT_ID      — from Reddit app credentials
-#   REDDIT_CLIENT_SECRET  — from Reddit app credentials
-#   REDDIT_USER_AGENT     — e.g. PromptForge/1.0 by Ezeking
+# Secrets required:
+#   HF_TOKEN        — Hugging Face write token
+#   HF_DATASET_REPO — e.g. ezechinnabugwu/promptforge-vectorstore
+#   HF_SPACE_ID     — e.g. ezechinnabugwu/promptforge
+#   GROQ_API_KEY    — for Gate 3 quality scoring
 
 name: Weekly Reddit Ingestion
 
 on:
   schedule:
-    - cron: "0 3 * * 0"   # 03:00 UTC Sunday = 04:00 WAT Sunday
-  workflow_dispatch:        # Manual trigger
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
 
 env:
   PYTHONPATH: ${{ github.workspace }}
@@ -27,7 +25,7 @@ env:
 jobs:
   ingest-reddit:
     runs-on: ubuntu-latest
-    timeout-minutes: 180    # 3-hour cap — Reddit ingestion is faster than arXiv
+    timeout-minutes: 120
 
     steps:
       - name: Checkout repository
@@ -50,10 +48,12 @@ jobs:
         with:
           path: ~/.cache/huggingface/hub
           key: ${{ runner.os }}-hf-bge-large-en-v1.5-v1
-          restore-keys: ${{ runner.os }}-hf-bge-large-
 
       - name: Install Python dependencies
         run: pip install -r requirements_actions.txt
+
+      - name: Create required directories
+        run: mkdir -p logs data/raw data/transcripts data/audio_tmp
 
       - name: Download existing vectorstore from HF Dataset
         env:
@@ -61,15 +61,12 @@ jobs:
           HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
         run: python deploy/download_vectorstore.py
 
-      - name: Run Reddit ingestion (all 4 gates active)
+      - name: Run Reddit ingestion via public JSON API
         env:
-          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
-          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
-          REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-        run: python src/ingestion/ingest_reddit.py
+        run: python src/ingestion/ingest_reddit_public.py
 
-      - name: Embed new chunks (incremental)
+      - name: Embed new chunks
         run: python src/processing/chunk_and_embed.py
         env:
           BATCH_SIZE: "32"
@@ -92,17 +89,8 @@ jobs:
           HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
         run: |
           python -c "
-          import os
-          from huggingface_hub import HfApi
-          api = HfApi(token=os.environ['HF_TOKEN'])
-          space_id = os.environ.get('HF_SPACE_ID', 'ezechinnabugwu/promptforge')
-          api.restart_space(repo_id=space_id)
-          print(f'Space restart triggered: {space_id}')
+          import os; from huggingface_hub import HfApi
+          HfApi(token=os.environ['HF_TOKEN']).restart_space(
+              repo_id=os.environ.get('HF_SPACE_ID','ezechinnabugwu/promptforge'))
+          print('Space restarted.')
           "
-
-      - name: Report completion
-        run: |
-          echo "Reddit ingestion complete."
-          echo "Vectorstore uploaded."
-          echo "HF Space restarted."
-          echo "Timestamp: $(date -u)"
