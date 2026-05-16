@@ -1,0 +1,109 @@
+# .github/workflows/eval_after_ingest.yml
+# PromptForge — Automated Quality Regression Eval
+# ==================================================
+# Runs after every successful daily_arxiv ingestion.
+# Executes run_evals.py against the golden eval set (sample of 20 queries).
+# Uploads results to HF Dataset for quality tracking over time.
+# Fails CI if mean component score drops below 0.40.
+#
+# Secrets required (same as daily_arxiv.yml):
+#   GROQ_API_KEY, HF_TOKEN, HF_DATASET_REPO, HF_SPACE_ID
+
+name: Quality Regression Eval
+
+on:
+  workflow_run:
+    workflows: ["Daily arXiv Ingestion"]
+    types: [completed]
+  workflow_dispatch:        # Manual trigger for spot checks
+    inputs:
+      sample_size:
+        description: "Number of eval queries to run (max 60)"
+        required: false
+        default: "20"
+
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  VECTOR_STORE_PATH: data/vector_store
+  EVAL_SAMPLE_SIZE: ${{ github.event.inputs.sample_size || '20' }}
+
+jobs:
+  run-eval:
+    # Only run if the triggering workflow succeeded
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements_actions.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Cache embedding model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: ${{ runner.os }}-hf-bge-large-en-v1.5-v1
+
+      - name: Install Python dependencies
+        run: pip install -r requirements_actions.txt
+
+      - name: Create required directories
+        run: mkdir -p logs data/raw data/transcripts data/audio_tmp data/evals/results
+
+      - name: Download vectorstore from HF Dataset
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+        run: python deploy/download_vectorstore.py
+
+      - name: Copy eval set into place
+        run: |
+          mkdir -p data/evals
+          cp data/evals/golden_eval_set.jsonl data/evals/golden_eval_set.jsonl 2>/dev/null || true
+          # If not in vectorstore, use the one from the repo
+          if [ ! -f data/evals/golden_eval_set.jsonl ]; then
+            echo "Eval set not found — check that golden_eval_set.jsonl is committed to the repo"
+            exit 1
+          fi
+
+      - name: Run quality regression eval
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+          EVAL_SAMPLE_SIZE: ${{ env.EVAL_SAMPLE_SIZE }}
+        run: python src/eval/run_evals.py
+
+      - name: Report eval results
+        if: always()
+        run: |
+          if [ -f data/evals/results/latest.json ]; then
+            echo "=== EVAL RESULTS ==="
+            python -c "
+          import json
+          r = json.load(open('data/evals/results/latest.json'))
+          print(f'Corpus size:          {r[\"corpus_size\"]:,} chunks')
+          print(f'Queries run:          {r[\"queries_run\"]}')
+          print(f'Answer rate:          {r[\"answer_rate\"]*100:.1f}%')
+          print(f'Mean component score: {r[\"mean_component_score\"]:.3f}')
+          print(f'Tier 1 coverage:      {r[\"tier1_coverage_rate\"]*100:.1f}%')
+          if r[\"failed_tier1_queries\"]:
+              print(f'Failed Tier 1:        {r[\"failed_tier1_queries\"]}')
+          "
+          else
+            echo "No results file found."
+          fi
