@@ -1,4 +1,6 @@
 data/ 
+!data/evals/
+!data/evals/**
 logs/ 
 __pycache__/ 
 *.pyc 
