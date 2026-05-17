@@ -176,31 +176,41 @@ def generate(query: str, chunks: list[dict]) -> str:
     context = "\n\n---\n\n".join(parts)
     user_msg = f"RETRIEVED CONTEXT:\n\n{context}\n\nQUERY: {query}"
 
-    try:
-        resp = requests.post(
-            GROQ_API_URL,
-            headers={
-                "Authorization": f"Bearer {groq_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": GROQ_MODEL,
-                "messages": [
-                    {"role": "system", "content":
-                     "You are PromptForge. Answer only from retrieved context. "
-                     "Be concise for evaluation purposes."},
-                    {"role": "user", "content": user_msg},
-                ],
-                "max_tokens": 800,
-                "temperature": 0.1,
-            },
-            timeout=45,
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
-    except Exception as exc:
-        logger.error("Generation failed: %s", exc)
-        return ""
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                GROQ_API_URL,
+                headers={
+                    "Authorization": f"Bearer {groq_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": GROQ_MODEL,
+                    "messages": [
+                        {"role": "system", "content":
+                         "You are PromptForge. Answer only from retrieved context. "
+                         "Be concise for evaluation purposes."},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    "max_tokens": 800,
+                    "temperature": 0.1,
+                },
+                timeout=45,
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+        except requests.exceptions.HTTPError as exc:
+            if resp.status_code == 429 and attempt < 2:
+                wait = 15 * (2 ** attempt)
+                logger.warning("Rate limited (429). Waiting %ds. Retry %d/3.", wait, attempt + 1)
+                time.sleep(wait)
+                continue
+            logger.error("Generation failed: %s", exc)
+            return ""
+        except Exception as exc:
+            logger.error("Generation failed: %s", exc)
+            return ""
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +296,8 @@ def run_eval_set(
         # Evaluate
         eval_result = check_components(answer, expected)
         score = eval_result["component_score"]
-        total_score += score
+        if answer:  # Only count answered queries in mean
+            total_score += score
 
         if t1_present:
             tier1_coverage += 1
@@ -307,7 +318,7 @@ def run_eval_set(
         logger.info("  Score: %.2f | T1: %s | Chunks: %d",
                     score, t1_present, len(chunks))
 
-        time.sleep(1)   # Rate limit courtesy pause
+        time.sleep(3)   # Rate limit courtesy pause — 3s avoids Groq 429s
 
     n = len(eval_items)
     summary = {
@@ -315,7 +326,7 @@ def run_eval_set(
         "queries_run":         n,
         "queries_answered":    answered,
         "answer_rate":         round(answered / n, 3) if n else 0,
-        "mean_component_score": round(total_score / n, 3) if n else 0,
+        "mean_component_score": round(total_score / answered, 3) if answered else 0,
         "tier1_coverage_rate": round(tier1_coverage / n, 3) if n else 0,
         "failed_tier1_queries": failed_tier1,
         "corpus_size":         collection.count(),
