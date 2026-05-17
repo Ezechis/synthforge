@@ -70,11 +70,56 @@ jobs:
           HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
         run: python deploy/download_vectorstore.py
 
+
+      - name: Download YouTube progress file
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+        run: |
+          python -c "
+import os, sys
+from pathlib import Path
+from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub.utils import EntryNotFoundError
+token = os.environ['HF_TOKEN']
+repo = os.environ.get('HF_DATASET_REPO', 'ezechinnabugwu/promptforge-vectorstore')
+dest = Path('data/youtube_progress.json')
+dest.parent.mkdir(parents=True, exist_ok=True)
+try:
+    hf_hub_download(repo_id=repo, repo_type='dataset', filename='youtube_progress.json', token=token, local_dir=str(dest.parent))
+    print('Progress file downloaded.')
+except EntryNotFoundError:
+    print('No progress file yet — starting fresh.')
+except Exception as exc:
+    print(f'Warning: {exc}')
+"
+
       - name: Run YouTube transcription batch (Groq Whisper)
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           BATCH_SIZE_VIDEOS: ${{ github.event.inputs.batch_size || '30' }}
         run: python src/ingestion/ingest_youtube_groq.py
+
+
+      - name: Upload YouTube progress file
+        if: always()
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+        run: |
+          python -c "
+import os, sys
+from pathlib import Path
+from huggingface_hub import HfApi
+token = os.environ['HF_TOKEN']
+repo = os.environ.get('HF_DATASET_REPO', 'ezechinnabugwu/promptforge-vectorstore')
+f = Path('data/youtube_progress.json')
+if not f.exists():
+    print('No progress file to upload.')
+    sys.exit(0)
+HfApi(token=token).upload_file(path_or_fileobj=str(f), path_in_repo='youtube_progress.json', repo_id=repo, repo_type='dataset', commit_message='Update YouTube transcription progress')
+print('Progress file uploaded.')
+"
 
       - name: Embed new transcript chunks
         run: python src/processing/chunk_and_embed.py
