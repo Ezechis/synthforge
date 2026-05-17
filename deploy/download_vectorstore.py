@@ -89,10 +89,22 @@ def main() -> None:
             size_mb = nested.stat().st_size / (1024 * 1024)
             logger.info("ChromaDB verified (nested): %.1f MB", size_mb)
         else:
-            logger.warning(
-                "chroma.sqlite3 not found after download. "
-                "Ingestion will create a new vectorstore."
-            )
+            nested_dir = VECTOR_STORE_PATH / "vector_store"
+            if nested_dir.is_dir():
+                import shutil
+                logger.info("Nested vectorstore found at %s — flattening.", nested_dir)
+                for item in nested_dir.iterdir():
+                    dest = VECTOR_STORE_PATH / item.name
+                    if not dest.exists():
+                        shutil.move(str(item), str(dest))
+                        logger.info("  Moved: %s", item.name)
+                nested_dir.rmdir()
+                logger.info("Flatten complete.")
+            else:
+                logger.warning(
+                    "chroma.sqlite3 not found after download. "
+                    "Ingestion will create a new vectorstore."
+                )
 
     # Verify BM25 cache
     bm25_path = VECTOR_STORE_PATH / "bm25_cache.pkl"
