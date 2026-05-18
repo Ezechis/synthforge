@@ -61,6 +61,58 @@ _CREDIBILITY_MAP: dict[str, str] = {
     "reddit": "community",
 }
 
+
+
+# ---------------------------------------------------------------------------
+# Era classification — temporal awareness for retrieval
+# ---------------------------------------------------------------------------
+
+def assign_era(date_value: Any) -> str:
+    """Classify a document date into a broad era string.
+
+    Handles three formats found across the PromptForge corpus:
+      - ISO 8601 strings: "2023-05-15", "2023-05-15T10:30:00Z"
+      - Unix timestamps (int or float): 1684123456
+      - Empty string or None: defaults to "2025-2026" (current era)
+
+    Args:
+        date_value: Raw date from JSON metadata.
+
+    Returns:
+        One of "pre-2023", "2023-2024", or "2025-2026".
+    """
+    import datetime
+
+    year: int | None = None
+
+    if not date_value:
+        return "2025-2026"
+
+    # Try Unix timestamp (int or float)
+    try:
+        ts = float(str(date_value))
+        if ts > 1_000_000:           # sanity check: real timestamp, not a year int
+            year = datetime.datetime.utcfromtimestamp(ts).year
+    except (ValueError, TypeError, OSError):
+        pass
+
+    # Try ISO string fallback
+    if year is None:
+        date_str = str(date_value).strip()[:10]   # "YYYY-MM-DD"
+        try:
+            year = datetime.date.fromisoformat(date_str).year
+        except ValueError:
+            pass
+
+    if year is None:
+        return "2025-2026"          # unknown — assume current
+
+    if year < 2023:
+        return "pre-2023"
+    if year <= 2024:
+        return "2023-2024"
+    return "2025-2026"
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -309,6 +361,7 @@ def process_json_file(
                 "url": item.get("url", item.get("permalink", "")),
                 "title": item.get("title", json_path.stem),
                 "file": json_path.name,
+                "era":  assign_era(item.get("created_utc", item.get("date", ""))),
             }
             item_new_chunks = [item_chunks[i] for i in item_new_idx]
             item_new_ids = [item_ids[i] for i in item_new_idx]
@@ -373,6 +426,12 @@ def process_json_file(
         "url": metadata_source.get("url", metadata_source.get("html_url", metadata_source.get("permalink", ""))),
         "title": metadata_source.get("title", metadata_source.get("name", json_path.stem)),
         "file": json_path.name,
+        "era":  assign_era(
+            metadata_source.get(
+                "date",
+                metadata_source.get("published", metadata_source.get("created_utc", "")),
+            )
+        ),
     }
 
     new_chunks = [chunks[i] for i in new_idx]
