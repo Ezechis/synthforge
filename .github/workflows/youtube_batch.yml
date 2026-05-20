@@ -1,28 +1,14 @@
-# .github/workflows/youtube_batch.yml
-# PromptForge — YouTube Batch Transcription (Groq Whisper)
-# ==========================================================
-# Processes YouTube transcription backlog in cloud batches.
-# Uses Groq Whisper API instead of local CPU — 100x faster.
-# Resume-safe: skips already-transcribed videos on every run.
-# Trigger manually until backlog is clear, then set to weekly.
-#
-# Secrets required:
-#   GROQ_API_KEY      — Groq API key (free tier)
-#   HF_TOKEN          — Hugging Face write token
-#   HF_DATASET_REPO   — vectorstore dataset repo
-#   HF_SPACE_ID       — space repo ID
-
 name: YouTube Batch Transcription
 
 on:
-  workflow_dispatch:          # Manual trigger — run this to process the backlog
+  workflow_dispatch:
     inputs:
       batch_size:
-        description: "Max videos to process in this run (default 30)"
+        description: "Max videos to process (default 30)"
         required: false
         default: "30"
   schedule:
-    - cron: "0 6 * * *"      # Every day 06:00 UTC = 07:00 WAT
+    - cron: "0 6 * * *"
 
 env:
   PYTHONPATH: ${{ github.workspace }}
@@ -31,7 +17,7 @@ env:
 jobs:
   transcribe-and-embed:
     runs-on: ubuntu-latest
-    timeout-minutes: 330      # 5.5 hours — leaves buffer before GitHub's 6h limit
+    timeout-minutes: 330
 
     steps:
       - name: Checkout repository
@@ -42,7 +28,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install ffmpeg (for audio splitting)
+      - name: Install ffmpeg
         run: sudo apt-get install -y ffmpeg
 
       - name: Cache pip packages
@@ -52,76 +38,44 @@ jobs:
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements_actions.txt') }}
           restore-keys: ${{ runner.os }}-pip-
 
-      - name: Cache embedding model weights
+      - name: Cache embedding model
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface/hub
           key: ${{ runner.os }}-hf-bge-large-en-v1.5-v1
 
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: pip install -r requirements_actions.txt
 
-      - name: Create required directories
+      - name: Create directories
         run: mkdir -p logs data/raw data/transcripts data/audio_tmp
 
-      - name: Download existing vectorstore
+      - name: Download vectorstore
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
         run: python deploy/download_vectorstore.py
 
-
       - name: Download YouTube progress file
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-        run: |
-          python -c "
-import os, sys
-from pathlib import Path
-from huggingface_hub import HfApi, hf_hub_download
-from huggingface_hub.utils import EntryNotFoundError
-token = os.environ['HF_TOKEN']
-repo = os.environ.get('HF_DATASET_REPO', 'ezechinnabugwu/promptforge-vectorstore')
-dest = Path('data/youtube_progress.json')
-dest.parent.mkdir(parents=True, exist_ok=True)
-try:
-    hf_hub_download(repo_id=repo, repo_type='dataset', filename='youtube_progress.json', token=token, local_dir=str(dest.parent))
-    print('Progress file downloaded.')
-except EntryNotFoundError:
-    print('No progress file yet — starting fresh.')
-except Exception as exc:
-    print(f'Warning: {exc}')
-"
+        run: python deploy/download_youtube_progress.py
 
-      - name: Run YouTube transcription batch (Groq Whisper)
+      - name: Run YouTube transcription batch
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           BATCH_SIZE_VIDEOS: ${{ github.event.inputs.batch_size || '30' }}
         run: python src/ingestion/ingest_youtube_groq.py
-
 
       - name: Upload YouTube progress file
         if: always()
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-        run: |
-          python -c "
-import os, sys
-from pathlib import Path
-from huggingface_hub import HfApi
-token = os.environ['HF_TOKEN']
-repo = os.environ.get('HF_DATASET_REPO', 'ezechinnabugwu/promptforge-vectorstore')
-f = Path('data/youtube_progress.json')
-if not f.exists():
-    print('No progress file to upload.')
-    sys.exit(0)
-HfApi(token=token).upload_file(path_or_fileobj=str(f), path_in_repo='youtube_progress.json', repo_id=repo, repo_type='dataset', commit_message='Update YouTube transcription progress')
-print('Progress file uploaded.')
-"
+        run: python deploy/upload_youtube_progress.py
 
-      - name: Embed new transcript chunks
+      - name: Embed new chunks
         run: python src/processing/chunk_and_embed.py
         env:
           BATCH_SIZE: "32"
@@ -132,7 +86,7 @@ print('Progress file uploaded.')
       - name: Build BM25 cache
         run: python deploy/build_bm25_cache.py
 
-      - name: Upload vectorstore to HF Dataset
+      - name: Upload vectorstore
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
@@ -146,12 +100,10 @@ print('Progress file uploaded.')
           python -c "
           import os
           from huggingface_hub import HfApi
-          api = HfApi(token=os.environ['HF_TOKEN'])
-          space_id = os.environ.get('HF_SPACE_ID', 'ezechinnabugwu/promptforge')
-          api.restart_space(repo_id=space_id)
-          print(f'Space restart triggered: {space_id}')
+          HfApi(token=os.environ['HF_TOKEN']).restart_space(
+              repo_id=os.environ.get('HF_SPACE_ID','ezechinnabugwu/promptforge'))
+          print('Space restarted.')
           "
 
       - name: Report
-        run: |
-          echo "YouTube batch complete. Timestamp: $(date -u)"
+        run: echo "YouTube batch complete. $(date -u)"
