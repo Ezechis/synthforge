@@ -84,7 +84,14 @@ jobs:
         run: python deploy/compress_vectorstore.py
 
       - name: Build BM25 cache
-        run: python deploy/build_bm25_cache.py
+        run: |
+          if [ -f "data/vector_store/bm25_cache.pkl" ]; then
+            echo "Downloaded BM25 cache found — copying to deploy/"
+            cp data/vector_store/bm25_cache.pkl deploy/bm25_cache.pkl
+            echo "BM25 cache ready."
+          else
+            python deploy/build_bm25_cache.py
+          fi
 
       - name: Upload vectorstore
         env:

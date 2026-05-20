@@ -48,7 +48,21 @@ def build_bm25_cache() -> None:
     """
     logger.info("Connecting to ChromaDB at %s ...", CHROMA_PATH)
     client = chromadb.PersistentClient(path=CHROMA_PATH)
-    collection = client.get_or_create_collection(COLLECTION_NAME)
+
+    # Diagnose what collections actually exist in the downloaded DB
+    existing = client.list_collections()
+    logger.info("Collections found in DB: %s", [c.name for c in existing])
+
+    # If our target collection doesn't exist but another one does, use that
+    if existing and not any(c.name == COLLECTION_NAME for c in existing):
+        actual_name = existing[0].name
+        logger.warning(
+            "Collection '%s' not found. Using '%s' instead.",
+            COLLECTION_NAME, actual_name
+        )
+        collection = client.get_collection(actual_name)
+    else:
+        collection = client.get_or_create_collection(COLLECTION_NAME)
 
     logger.info("Fetching all documents from collection...")
     all_docs = collection.get(include=["documents", "metadatas"])
