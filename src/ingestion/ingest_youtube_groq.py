@@ -391,8 +391,11 @@ def main() -> None:
         v for v in all_videos
         if v["id"] not in progress["done"]
         and v["id"] not in progress["failed"]
-        and v["duration_seconds"] > 60    # skip shorts < 1 minute
-        and v["duration_seconds"] < 7200  # skip anything > 2 hours
+        # duration == 0 means yt-dlp could not retrieve it via --flat-playlist;
+        # treat as unknown and include. Individual download step will handle
+        # actual shorts naturally (they are short to transcribe, low cost).
+        and (v["duration_seconds"] == 0 or v["duration_seconds"] > 60)
+        and (v["duration_seconds"] == 0 or v["duration_seconds"] < 7200)
     ]
 
     logger.info(
