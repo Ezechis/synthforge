@@ -1,5 +1,5 @@
 # .github/workflows/weekly_reddit.yml
-# PromptForge — Weekly Reddit Ingestion (Public JSON API)
+# SynthForge — Weekly Reddit Ingestion (Public JSON API)
 # =========================================================
 # Runs every Sunday at 04:00 WAT (03:00 UTC).
 # Uses Reddit public JSON API — zero credentials required.
@@ -7,8 +7,8 @@
 #
 # Secrets required:
 #   HF_TOKEN        — Hugging Face write token
-#   HF_DATASET_REPO — e.g. ezechinnabugwu/promptforge-vectorstore
-#   HF_SPACE_ID     — e.g. ezechinnabugwu/promptforge
+#   HF_DATASET_REPO — e.g. ezechinnabugwu/synthforge-vectorstore
+#   HF_SPACE_ID     — e.g. ezechinnabugwu/synthforge
 #   GROQ_API_KEY    — for Gate 3 quality scoring
 
 name: Weekly Reddit Ingestion
@@ -28,6 +28,14 @@ jobs:
     timeout-minutes: 120
 
     steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          df -h
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -91,6 +99,6 @@ jobs:
           python -c "
           import os; from huggingface_hub import HfApi
           HfApi(token=os.environ['HF_TOKEN']).restart_space(
-              repo_id=os.environ.get('HF_SPACE_ID','ezechinnabugwu/promptforge'))
+              repo_id=os.environ.get('HF_SPACE_ID','ezechinnabugwu/synthforge'))
           print('Space restarted.')
           "

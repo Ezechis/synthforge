@@ -1,5 +1,5 @@
 # .github/workflows/daily_arxiv.yml
-# PromptForge — Daily arXiv Ingestion
+# SynthForge — Daily arXiv Ingestion
 # =====================================
 # Runs every day at 03:00 WAT (02:00 UTC).
 # Replaces the local APScheduler arXiv job entirely.
@@ -7,8 +7,8 @@
 #
 # Secrets required in GitHub repo settings:
 #   HF_TOKEN          — Hugging Face write token
-#   HF_DATASET_REPO   — e.g. ezechinnabugwu/promptforge-vectorstore
-#   HF_SPACE_ID       — e.g. ezechinnabugwu/promptforge
+#   HF_DATASET_REPO   — e.g. ezechinnabugwu/synthforge-vectorstore
+#   HF_SPACE_ID       — e.g. ezechinnabugwu/synthforge
 
 name: Daily arXiv Ingestion
 
@@ -27,6 +27,14 @@ jobs:
     timeout-minutes: 300    # 5-hour hard cap — prevents runaway jobs
 
     steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          df -h
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -90,7 +98,7 @@ jobs:
           import os
           from huggingface_hub import HfApi
           api = HfApi(token=os.environ['HF_TOKEN'])
-          space_id = os.environ.get('HF_SPACE_ID', 'ezechinnabugwu/promptforge')
+          space_id = os.environ.get('HF_SPACE_ID', 'ezechinnabugwu/synthforge')
           api.restart_space(repo_id=space_id)
           print(f'Space restart triggered: {space_id}')
           "

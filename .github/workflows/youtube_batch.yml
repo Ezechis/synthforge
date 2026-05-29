@@ -20,6 +20,14 @@ jobs:
     timeout-minutes: 330
 
     steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          df -h
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -108,7 +116,7 @@ jobs:
           import os
           from huggingface_hub import HfApi
           HfApi(token=os.environ['HF_TOKEN']).restart_space(
-              repo_id=os.environ.get('HF_SPACE_ID','ezechinnabugwu/promptforge'))
+              repo_id=os.environ.get('HF_SPACE_ID','ezechinnabugwu/synthforge'))
           print('Space restarted.')
           "
 
