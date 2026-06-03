@@ -107,7 +107,6 @@ def load_progress(progress_file: Path) -> dict[str, Any]:
                 len(data.get("failed_ids", [])),
                 len(data.get("no_transcript_ids", [])),
             )
-            data.setdefault("no_transcript_ids", [])
             return data
         except json.JSONDecodeError as exc:
             logger.warning("Progress file corrupt, starting fresh: %s", exc)
@@ -202,10 +201,11 @@ def build_pending_list(
 # ---------------------------------------------------------------------------
 
 def fetch_transcript_api(video_id: str) -> str | None:
-    """Fetch captions using youtube-transcript-api.
+    """Fetch captions using youtube-transcript-api (modern API, v0.6+).
 
-    Tries manual captions first, then auto-generated, then translates any
-    available language to English. Returns None if no captions exist.
+    Uses FetchedTranscript directly — no list_transcripts(), no
+    find_manually_created_transcript(). Tries preferred languages first,
+    falls back to any available language. Returns None if no captions exist.
 
     Args:
         video_id: YouTube video ID.
@@ -215,54 +215,48 @@ def fetch_transcript_api(video_id: str) -> str | None:
     """
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
-        from youtube_transcript_api._errors import (
-            NoTranscriptFound,
-            TranscriptsDisabled,
-            VideoUnavailable,
-        )
 
+        api = YouTubeTranscriptApi()
+
+        # Try preferred languages directly
         try:
-            transcript_list = YouTubeTranscriptApi()
-            transcript = None
+            transcript_data = api.fetch(video_id, languages=CAPTION_LANGUAGES)
+            full_text = " ".join(
+                seg.get("text", "").replace("\n", " ").strip()
+                for seg in transcript_data
+                if seg.get("text", "").strip()
+            )
+            if len(full_text) >= MIN_TRANSCRIPT_CHARS:
+                return full_text
+        except Exception:
+            pass
 
-            # Try manual captions in preferred languages
-            for lang in CAPTION_LANGUAGES:
-                try:
-                    transcript = transcript_list.find_manually_created_transcript([lang])
-                    break
-                except NoTranscriptFound:
-                    continue
-
-            # Try auto-generated captions in preferred languages
-            if transcript is None:
-                for lang in CAPTION_LANGUAGES:
-                    try:
-                        transcript = transcript_list.find_generated_transcript([lang])
-                        break
-                    except NoTranscriptFound:
-                        continue
-
-            # Last resort: any language, translate to English
-            if transcript is None:
-                available = list(transcript_list)
-                if available:
-                    try:
-                        transcript = available[0].translate("en")
-                    except Exception:
-                        return None
-
-            if transcript is None:
+        # Fallback: list all available transcripts and take the first one
+        try:
+            transcript_list = api.list(video_id)
+            available = list(transcript_list)
+            if not available:
                 return None
-
-            segments = transcript.fetch()
+            # Try to find an English one first
+            for t in available:
+                if t.language_code.startswith("en"):
+                    segments = t.fetch()
+                    full_text = " ".join(
+                        seg.get("text", "").replace("\n", " ").strip()
+                        for seg in segments
+                        if seg.get("text", "").strip()
+                    )
+                    if len(full_text) >= MIN_TRANSCRIPT_CHARS:
+                        return full_text
+            # Take whatever is available
+            segments = available[0].fetch()
             full_text = " ".join(
                 seg.get("text", "").replace("\n", " ").strip()
                 for seg in segments
                 if seg.get("text", "").strip()
             )
             return full_text if len(full_text) >= MIN_TRANSCRIPT_CHARS else None
-
-        except (NoTranscriptFound, TranscriptsDisabled, VideoUnavailable) as exc:
+        except Exception as exc:
             logger.warning("No transcript for %s: %s", video_id, exc)
             return None
 
