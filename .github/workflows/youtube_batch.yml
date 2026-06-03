@@ -44,6 +44,7 @@ jobs:
           pip install yt-dlp>=2026.3.17
           pip install groq>=0.5.0
           pip install huggingface-hub>=0.23.0
+          pip install youtube-transcript-api>=0.6.0
           # NO chromadb, NO sentence-transformers, NO rank-bm25
           # Those are for embedding — handled locally, not here
 
