@@ -1,23 +1,23 @@
 name: YouTube Batch Transcription
 
-on:
-  workflow_dispatch:
-    inputs:
-      batch_size:
-        description: "Max videos to process (default 30)"
-        required: false
-        default: "30"
-  schedule:
-    - cron: "0 6 * * *"
+# Runs daily at 06:00 UTC (07:00 WAT).
+# This workflow ONLY transcribes — it does NOT embed or touch ChromaDB.
+# Transcripts are staged to HF Dataset: ezechinnabugwu/synthforge-yt-staging
+# Local machine pulls staging and embeds during the normal corpus update sequence.
+#
+# This separation is the key reliability fix:
+#   - Transcription on GH Actions = yt-dlp + Groq API only (no 971MB DB round-trip)
+#   - Embedding on local machine = full ChromaDB control, no disk space risk
 
-env:
-  PYTHONPATH: ${{ github.workspace }}
-  VECTOR_STORE_PATH: data/vector_store
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:  # allow manual trigger for testing
 
 jobs:
-  transcribe-and-embed:
+  transcribe:
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 300  # 5-hour hard ceiling per batch of 30
 
     steps:
       - name: Free disk space
@@ -26,6 +26,7 @@ jobs:
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
           df -h
 
       - name: Checkout repository
@@ -34,91 +35,127 @@ jobs:
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - name: Install ffmpeg
-        run: sudo apt-get install -y ffmpeg
+      - name: Install transcription dependencies only
+        run: |
+          pip install --upgrade pip
+          # Transcription pipeline — deliberately minimal to keep install fast
+          pip install yt-dlp>=2026.3.17
+          pip install groq>=0.5.0
+          pip install huggingface-hub>=0.23.0
+          # NO chromadb, NO sentence-transformers, NO rank-bm25
+          # Those are for embedding — handled locally, not here
 
-      - name: Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements_actions.txt') }}
-          restore-keys: ${{ runner.os }}-pip-
-
-      - name: Cache embedding model
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface/hub
-          key: ${{ runner.os }}-hf-bge-large-en-v1.5-v1
-
-      - name: Install dependencies
-        run: pip install -r requirements_actions.txt
-
-      - name: Create directories
-        run: mkdir -p logs data/raw data/transcripts data/audio_tmp
-
-      - name: Download vectorstore
+      - name: Pull current progress tracker from HF staging
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-        run: python deploy/download_vectorstore.py
+        run: |
+          python - <<'EOF'
+          from huggingface_hub import hf_hub_download, HfApi
+          import os, json, pathlib
 
-      - name: Download YouTube progress file
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-        run: python deploy/download_youtube_progress.py
+          staging_repo = "ezechinnabugwu/synthforge-yt-staging"
+          progress_path = "yt_progress.json"
 
-      - name: Run YouTube transcription batch
+          try:
+              local_path = hf_hub_download(
+                  repo_id=staging_repo,
+                  filename=progress_path,
+                  repo_type="dataset",
+                  token=os.environ["HF_TOKEN"],
+              )
+              import shutil
+              shutil.copy(local_path, progress_path)
+              with open(progress_path) as f:
+                  data = json.load(f)
+              print(f"Progress loaded: {data.get('completed_count', 0)} videos done")
+          except Exception as e:
+              print(f"No existing progress (first run or new repo): {e}")
+              pathlib.Path(progress_path).write_text(json.dumps({
+                  "completed_ids": [],
+                  "completed_count": 0,
+                  "failed_ids": [],
+              }))
+          EOF
+
+      - name: Run batch transcription (30 videos, Groq Whisper API)
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          BATCH_SIZE_VIDEOS: ${{ github.event.inputs.batch_size || '30' }}
-        run: python src/ingestion/ingest_youtube_groq.py
-
-      - name: Upload YouTube progress file
-        if: always()
-        env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-        run: python deploy/upload_youtube_progress.py
-
-      - name: Embed new chunks
-        run: python src/processing/chunk_and_embed.py
-        env:
-          BATCH_SIZE: "32"
-
-      - name: Compress vectorstore
-        run: python deploy/compress_vectorstore.py
-
-      - name: Build BM25 cache
         run: |
-          if [ -f "data/vector_store/bm25_cache.pkl" ]; then
-            echo "Downloaded BM25 cache found — copying to deploy/"
-            cp data/vector_store/bm25_cache.pkl deploy/bm25_cache.pkl
-            echo "BM25 cache ready."
-          else
-            python deploy/build_bm25_cache.py
-          fi
+          python src/ingestion/ingest_youtube_actions.py \
+            --batch-size 30 \
+            --progress-file yt_progress.json \
+            --output-dir yt_transcripts_batch
 
-      - name: Upload vectorstore
+      - name: Upload batch transcripts to HF staging dataset
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-        run: python deploy/upload_vectorstore.py
-
-      - name: Restart HF Space
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
         run: |
-          python -c "
-          import os
-          from huggingface_hub import HfApi
-          HfApi(token=os.environ['HF_TOKEN']).restart_space(
-              repo_id=os.environ.get('HF_SPACE_ID','ezechinnabugwu/synthforge'))
-          print('Space restarted.')
-          "
+          python - <<'EOF'
+          import os, json, pathlib
+          from huggingface_hub import HfApi, upload_file
 
-      - name: Report
-        run: echo "YouTube batch complete. $(date -u)"
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          staging_repo = "ezechinnabugwu/synthforge-yt-staging"
+          batch_dir = pathlib.Path("yt_transcripts_batch")
+
+          # Ensure the staging dataset repo exists
+          try:
+              api.create_repo(
+                  repo_id=staging_repo,
+                  repo_type="dataset",
+                  exist_ok=True,
+                  private=False,
+              )
+          except Exception as e:
+              print(f"Repo already exists or create failed: {e}")
+
+          # Upload every transcript JSONL produced in this batch
+          uploaded = 0
+          for jsonl_file in batch_dir.glob("*.jsonl"):
+              try:
+                  api.upload_file(
+                      path_or_fileobj=str(jsonl_file),
+                      path_in_repo=f"transcripts/{jsonl_file.name}",
+                      repo_id=staging_repo,
+                      repo_type="dataset",
+                  )
+                  print(f"  Uploaded: {jsonl_file.name}")
+                  uploaded += 1
+              except Exception as e:
+                  print(f"  FAILED {jsonl_file.name}: {e}")
+
+          print(f"Uploaded {uploaded} transcript files to staging.")
+
+          # Upload updated progress tracker
+          if pathlib.Path("yt_progress.json").exists():
+              api.upload_file(
+                  path_or_fileobj="yt_progress.json",
+                  path_in_repo="yt_progress.json",
+                  repo_id=staging_repo,
+                  repo_type="dataset",
+              )
+              print("Progress tracker updated on HF.")
+
+          with open("yt_progress.json") as f:
+              progress = json.load(f)
+          print(f"Total completed: {progress.get('completed_count', 0)} / 947")
+          EOF
+
+      - name: Report batch summary
+        run: |
+          echo "=== BATCH SUMMARY ==="
+          ls -la yt_transcripts_batch/ 2>/dev/null || echo "No transcripts produced"
+          python - <<'EOF'
+          import json, pathlib
+          progress = json.loads(pathlib.Path("yt_progress.json").read_text())
+          completed = progress.get("completed_count", 0)
+          failed = len(progress.get("failed_ids", []))
+          remaining = 947 - completed
+          pct = (completed / 947) * 100
+          print(f"Completed : {completed}/947 ({pct:.1f}%)")
+          print(f"Remaining : {remaining}")
+          print(f"Failed IDs: {failed}")
+          EOF
