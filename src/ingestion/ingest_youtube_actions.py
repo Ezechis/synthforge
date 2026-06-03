@@ -263,14 +263,14 @@ def fetch_transcript_api(video_id: str) -> str | None:
             return full_text if len(full_text) >= MIN_TRANSCRIPT_CHARS else None
 
         except (NoTranscriptFound, TranscriptsDisabled, VideoUnavailable) as exc:
-            logger.debug("No transcript for %s: %s", video_id, exc)
+            logger.warning("No transcript for %s: %s", video_id, exc)
             return None
 
     except ImportError:
         logger.error("youtube-transcript-api not installed. Run: pip install youtube-transcript-api")
         return None
     except Exception as exc:
-        logger.debug("Transcript API error for %s: %s", video_id, exc)
+        logger.warning("Transcript API error for %s: %s", video_id, exc)
         return None
 
 
