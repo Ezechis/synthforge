@@ -28,7 +28,7 @@ from rank_bm25 import BM25Okapi
 # ---------------------------------------------------------------------------
 
 CHROMA_PATH: str = "data/vector_store"
-COLLECTION_NAME: str = "promptforge"
+COLLECTION_NAME: str = "synthforge"
 CACHE_OUTPUT_PATH: Path = Path("deploy/bm25_cache.pkl")
 
 logging.basicConfig(
@@ -55,7 +55,8 @@ def build_bm25_cache() -> None:
 
     # If our target collection doesn't exist but another one does, use that
     if existing and not any(c.name == COLLECTION_NAME for c in existing):
-        actual_name = existing[0].name
+        synthforge_cols = [c for c in existing if c.name == COLLECTION_NAME]
+        actual_name = synthforge_cols[0].name if synthforge_cols else existing[0].name
         logger.warning(
             "Collection '%s' not found. Using '%s' instead.",
             COLLECTION_NAME, actual_name
