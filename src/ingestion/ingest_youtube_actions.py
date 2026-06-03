@@ -222,7 +222,7 @@ def fetch_transcript_api(video_id: str) -> str | None:
         )
 
         try:
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            transcript_list = YouTubeTranscriptApi()
             transcript = None
 
             # Try manual captions in preferred languages
