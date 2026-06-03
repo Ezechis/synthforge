@@ -10,7 +10,7 @@ starts with the current production corpus and only adds new chunks.
 
 Environment variables:
     HF_TOKEN         — Hugging Face read/write token
-    HF_DATASET_REPO  — Dataset repo ID, e.g. ezechinnabugwu/promptforge-vectorstore
+    HF_DATASET_REPO  — Dataset repo ID, e.g. ezechinnabugwu/synthforge-vectorstore
     VECTOR_STORE_PATH — Local destination path (default: data/vector_store)
 
 Usage:
@@ -40,7 +40,7 @@ VECTOR_STORE_PATH: Path = Path(
 )
 HF_TOKEN: str = os.environ.get("HF_TOKEN", "")
 HF_DATASET_REPO: str = os.environ.get(
-    "HF_DATASET_REPO", "ezechinnabugwu/promptforge-vectorstore"
+    "HF_DATASET_REPO", "ezechinnabugwu/synthforge-vectorstore"
 )
 IGNORE_PATTERNS: list[str] = ["*.md", ".gitattributes", "*.json"]
 
