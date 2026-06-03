@@ -107,6 +107,7 @@ def load_progress(progress_file: Path) -> dict[str, Any]:
                 len(data.get("failed_ids", [])),
                 len(data.get("no_transcript_ids", [])),
             )
+            data.setdefault("no_transcript_ids", [])
             return data
         except json.JSONDecodeError as exc:
             logger.warning("Progress file corrupt, starting fresh: %s", exc)
