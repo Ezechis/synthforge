@@ -1,121 +1,70 @@
 """
 deploy/download_vectorstore.py
-================================
-Downloads the ChromaDB vectorstore and BM25 cache from the Hugging Face
-Dataset repo onto the local filesystem (used by GitHub Actions runners
-at the start of every ingestion job).
-
-On GitHub Actions, this script runs BEFORE any ingestion so the runner
-starts with the current production corpus and only adds new chunks.
-
-Environment variables:
-    HF_TOKEN         — Hugging Face read/write token
-    HF_DATASET_REPO  — Dataset repo ID, e.g. ezechinnabugwu/synthforge-vectorstore
-    VECTOR_STORE_PATH — Local destination path (default: data/vector_store)
-
-Usage:
-    python deploy/download_vectorstore.py
-
-Author: Ezechinyere Nnabugwu / DeepForge
+Improved version with retry logic for Hugging Face rate limits (429).
 """
 
-import logging
 import os
-import sys
+import time
+import random
 from pathlib import Path
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger(__name__)
+from huggingface_hub import snapshot_download, HfHubHTTPError
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-VECTOR_STORE_PATH: Path = Path(
-    os.environ.get("VECTOR_STORE_PATH", "data/vector_store")
-)
-HF_TOKEN: str = os.environ.get("HF_TOKEN", "")
-HF_DATASET_REPO: str = os.environ.get(
-    "HF_DATASET_REPO", "ezechinnabugwu/synthforge-vectorstore"
-)
-IGNORE_PATTERNS: list[str] = ["*.md", ".gitattributes", "*.json"]
+# Configuration
+HF_DATASET_REPO = os.getenv("HF_DATASET_REPO", "ezechinnabugwu/synthforge-vectorstore")
+LOCAL_VECTORSTORE_PATH = Path("data/vector_store")
+MAX_RETRIES = 5
+INITIAL_BACKOFF_SECONDS = 10
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def download_vectorstore_with_retry():
+    """Download vectorstore with exponential backoff + jitter on rate limits."""
 
-def main() -> None:
-    """Download vectorstore from HF Dataset to VECTOR_STORE_PATH."""
-    try:
-        from huggingface_hub import snapshot_download  # type: ignore[import]
-    except ImportError:
-        logger.error("huggingface_hub not installed. Run: pip install huggingface_hub")
-        sys.exit(1)
+    LOCAL_VECTORSTORE_PATH.mkdir(parents=True, exist_ok=True)
 
-    if not HF_DATASET_REPO:
-        logger.error("HF_DATASET_REPO environment variable not set.")
-        sys.exit(1)
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            print(f"[Attempt {attempt}/{MAX_RETRIES}] Downloading vectorstore from {HF_DATASET_REPO}...")
 
-    VECTOR_STORE_PATH.mkdir(parents=True, exist_ok=True)
-    logger.info("Downloading vectorstore from: %s", HF_DATASET_REPO)
-    logger.info("Destination: %s", VECTOR_STORE_PATH.resolve())
+            snapshot_download(
+                repo_id=HF_DATASET_REPO,
+                repo_type="dataset",
+                local_dir=str(LOCAL_VECTORSTORE_PATH),
+                local_dir_use_symlinks=False,
+                resume_download=True,
+            )
 
-    try:
-        snapshot_download(
-            repo_id=HF_DATASET_REPO,
-            repo_type="dataset",
-            local_dir=str(VECTOR_STORE_PATH),
-            token=HF_TOKEN or None,
-            ignore_patterns=IGNORE_PATTERNS,
-        )
-    except Exception as exc:
-        logger.error("Download failed: %s", exc)
-        sys.exit(1)
+            print("✅ Vectorstore downloaded successfully.")
+            return True
 
-    # Verify ChromaDB presence
-    sqlite_path = VECTOR_STORE_PATH / "chroma.sqlite3"
-    if sqlite_path.exists():
-        size_mb = sqlite_path.stat().st_size / (1024 * 1024)
-        logger.info("ChromaDB verified: %.1f MB", size_mb)
-    else:
-        # Some setups store chroma.sqlite3 in a subdirectory
-        nested = VECTOR_STORE_PATH / "vector_store" / "chroma.sqlite3"
-        if nested.exists():
-            size_mb = nested.stat().st_size / (1024 * 1024)
-            logger.info("ChromaDB verified (nested): %.1f MB", size_mb)
-        else:
-            nested_dir = VECTOR_STORE_PATH / "vector_store"
-            if nested_dir.is_dir():
-                import shutil
-                logger.info("Nested vectorstore found at %s — flattening.", nested_dir)
-                for item in nested_dir.iterdir():
-                    dest = VECTOR_STORE_PATH / item.name
-                    if not dest.exists():
-                        shutil.move(str(item), str(dest))
-                        logger.info("  Moved: %s", item.name)
-                nested_dir.rmdir()
-                logger.info("Flatten complete.")
+        except HfHubHTTPError as e:
+            if e.response.status_code == 429:
+                if attempt == MAX_RETRIES:
+                    print(f"❌ Rate limit hit {MAX_RETRIES} times. Giving up.")
+                    raise
+
+                backoff = INITIAL_BACKOFF_SECONDS * (2 ** (attempt - 1))
+                jitter = random.uniform(0, backoff * 0.3)
+                sleep_time = backoff + jitter
+
+                print(f"⚠️  Rate limited (429). Sleeping for {sleep_time:.1f} seconds before retry...")
+                time.sleep(sleep_time)
             else:
-                logger.warning(
-                    "chroma.sqlite3 not found after download. "
-                    "Ingestion will create a new vectorstore."
-                )
+                print(f"❌ Hugging Face HTTP error: {e}")
+                raise
 
-    # Verify BM25 cache
-    bm25_path = VECTOR_STORE_PATH / "bm25_cache.pkl"
-    if bm25_path.exists():
-        size_kb = bm25_path.stat().st_size / 1024
-        logger.info("BM25 cache verified: %.1f KB", size_kb)
-    else:
-        logger.warning("bm25_cache.pkl not found. Will be rebuilt after embedding.")
+        except Exception as e:
+            print(f"❌ Unexpected error while downloading: {e}")
+            if attempt == MAX_RETRIES:
+                raise
+            time.sleep(5)
 
-    logger.info("Vectorstore download complete.")
+    return False
 
 
 if __name__ == "__main__":
-    main()
+    # Only download if the database doesn't already exist (helps with caching)
+    if not (LOCAL_VECTORSTORE_PATH / "chroma.sqlite3").exists():
+        download_vectorstore_with_retry()
+    else:
+        print("✅ Vectorstore already exists (using cache). Skipping download.")

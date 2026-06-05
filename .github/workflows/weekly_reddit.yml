@@ -63,11 +63,23 @@ jobs:
       - name: Create required directories
         run: mkdir -p logs data/raw data/transcripts data/audio_tmp
 
-      - name: Download existing vectorstore from HF Dataset
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-        run: python deploy/download_vectorstore.py
+      - name: Cache vectorstore + BM25 cache
+                   id: cache
+                   uses: actions/cache@v4
+                   with:
+                      path: |
+                         data/vector_store
+                         deploy/bm25_cache.pkl
+                     key: vectorstore-${{ runner.os }}-${{ github.sha }}
+                     restore-keys: |
+                        vectorstore-${{ runner.os }}-
+
+             - name: Download vectorstore from HF (only if cache miss)
+               if: steps.cache.outputs.cache-hit != 'true'
+               run: python deploy/download_vectorstore.py
+               env:
+                  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+                  HF_DATASET_REPO: ezechinnabugwu/synthforge-vectorstore
 
       - name: Run Reddit ingestion via public JSON API
         env:
