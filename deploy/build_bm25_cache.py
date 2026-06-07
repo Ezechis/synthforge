@@ -1,111 +1,68 @@
 """
-build_bm25_cache.py — Pre-build BM25 index and corpus cache for PromptForge.
-
-Reads all chunks from ChromaDB, builds the BM25Okapi index, and saves
-three objects to a pickle file:
-    - bm25:          BM25Okapi index (ready for keyword search)
-    - corpus_chunks: list of document strings (parallel to bm25)
-    - corpus_metas:  list of metadata dicts (parallel to corpus_chunks)
-
-The Space loads this pickle on startup instead of rebuilding from scratch.
-Effect: cold-start time drops by 25-35 seconds on a 15,000+ chunk corpus.
-
-Run this AFTER chunk_and_embed.py and BEFORE upload_vectorstore.py.
-
-Usage:
-    python deploy/build_bm25_cache.py
+deploy/build_bm25_cache.py
+Improved version with better collection handling and logging.
 """
 
-import logging
+import os
 import pickle
 from pathlib import Path
-
-import chromadb
 from rank_bm25 import BM25Okapi
+from chromadb import PersistentClient
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-CHROMA_PATH: str = "data/vector_store"
-COLLECTION_NAME: str = "synthforge"
-CACHE_OUTPUT_PATH: Path = Path("deploy/bm25_cache.pkl")
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger(__name__)
+VECTORSTORE_PATH = Path("data/vector_store")
+BM25_CACHE_PATH = Path("deploy/bm25_cache.pkl")
+TARGET_COLLECTION = "synthforge"
 
 
-def build_bm25_cache() -> None:
-    """Load corpus from ChromaDB, build BM25 index, save to pickle.
+def build_bm25_cache():
+    print("Connecting to ChromaDB at data/vector_store ...")
 
-    Raises:
-        RuntimeError: If ChromaDB collection is empty.
-        OSError: If pickle file cannot be written.
-    """
-    logger.info("Connecting to ChromaDB at %s ...", CHROMA_PATH)
-    client = chromadb.PersistentClient(path=CHROMA_PATH)
+    client = PersistentClient(path=str(VECTORSTORE_PATH))
+    collections = client.list_collections()
 
-    # Diagnose what collections actually exist in the downloaded DB
-    existing = client.list_collections()
-    logger.info("Collections found in DB: %s", [c.name for c in existing])
+    print(f"Collections found in DB: {[c.name for c in collections]}")
 
-    # If our target collection doesn't exist but another one does, use that
-    if existing and not any(c.name == COLLECTION_NAME for c in existing):
-        synthforge_cols = [c for c in existing if c.name == COLLECTION_NAME]
-        actual_name = synthforge_cols[0].name if synthforge_cols else existing[0].name
-        logger.warning(
-            "Collection '%s' not found. Using '%s' instead.",
-            COLLECTION_NAME, actual_name
-        )
-        collection = client.get_collection(actual_name)
-    else:
-        collection = client.get_or_create_collection(COLLECTION_NAME)
+    # Try to get the target collection
+    try:
+        collection = client.get_collection(name=TARGET_COLLECTION)
+    except Exception:
+        print(f"❌ Collection '{TARGET_COLLECTION}' not found!")
+        print("Available collections:", [c.name for c in collections])
+        raise RuntimeError(f"Collection '{TARGET_COLLECTION}' does not exist. Please check your vectorstore.")
 
-    logger.info("Fetching all documents from collection...")
-    all_docs = collection.get(include=["documents", "metadatas"])
-    corpus_chunks: list[str] = all_docs["documents"]
-    corpus_metas: list[dict] = all_docs["metadatas"]
+    print(f"Fetching all documents from collection '{TARGET_COLLECTION}'...")
 
-    if not corpus_chunks:
+    results = collection.get(include=["documents", "metadatas"])
+    documents = results.get("documents", [])
+    metadatas = results.get("metadatas", [])
+
+    if not documents:
         raise RuntimeError(
-            "ChromaDB collection is empty. "
+            f"ChromaDB collection '{TARGET_COLLECTION}' is empty. "
             "Run chunk_and_embed.py before building the BM25 cache."
         )
 
-    logger.info("Corpus loaded: %d chunks.", len(corpus_chunks))
-    logger.info("Tokenising corpus for BM25...")
+    print(f"Corpus loaded: {len(documents)} chunks.")
 
-    tokenised: list[list[str]] = [doc.lower().split() for doc in corpus_chunks]
+    # Tokenize documents
+    print("Tokenising corpus for BM25...")
+    tokenized_corpus = [doc.split() for doc in documents]
 
-    logger.info("Building BM25Okapi index...")
-    bm25 = BM25Okapi(tokenised)
-    logger.info("BM25 index built.")
+    print("Building BM25 index...")
+    bm25 = BM25Okapi(tokenized_corpus)
 
-    cache_payload = {
-        "bm25": bm25,
-        "corpus_chunks": corpus_chunks,
-        "corpus_metas": corpus_metas,
-    }
+    # Save cache
+    print("Saving cache to deploy/bm25_cache.pkl ...")
+    BM25_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    CACHE_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(BM25_CACHE_PATH, "wb") as f:
+        pickle.dump({
+            "bm25": bm25,
+            "corpus_chunks": documents,
+            "corpus_metas": metadatas
+        }, f)
 
-    logger.info("Saving cache to %s ...", CACHE_OUTPUT_PATH)
-    try:
-        with open(CACHE_OUTPUT_PATH, "wb") as fh:
-            pickle.dump(cache_payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
-    except OSError as exc:
-        raise OSError(f"Failed to write BM25 cache to {CACHE_OUTPUT_PATH}: {exc}") from exc
-
-    size_mb = round(CACHE_OUTPUT_PATH.stat().st_size / (1024 * 1024), 2)
-    logger.info("Cache saved. File size: %.2f MB", size_mb)
-    logger.info(
-        "Next steps: run upload_vectorstore.py (it will upload this cache "
-        "alongside ChromaDB), then update app.py to load from pickle."
-    )
+    print(f"✅ BM25 cache built successfully with {len(documents)} documents.")
 
 
 if __name__ == "__main__":

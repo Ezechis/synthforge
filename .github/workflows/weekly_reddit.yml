@@ -38,9 +38,9 @@ jobs:
           restore-keys: |
             vectorstore-${{ runner.os }}-
 
-      - name: Download vectorstore from HF (continue even if rate limited)
-        continue-on-error: true
+      - name: Download vectorstore from HF (only if cache miss)
         if: steps.cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         run: python deploy/download_vectorstore.py
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
