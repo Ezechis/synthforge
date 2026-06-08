@@ -12,6 +12,10 @@ Effect: cold-start time drops by 25-35 seconds on a 15,000+ chunk corpus.
 
 Run this AFTER chunk_and_embed.py and BEFORE upload_vectorstore.py.
 
+Local path:          data/vector_store/chroma.sqlite3
+GitHub Actions path: data/vector_store/vector_store/chroma.sqlite3
+This script auto-detects which path is present.
+
 Usage:
     python deploy/build_bm25_cache.py
 """
@@ -27,7 +31,25 @@ from rank_bm25 import BM25Okapi
 # Constants
 # ---------------------------------------------------------------------------
 
-CHROMA_PATH: str = "data/vector_store"
+# Local environment: ChromaDB lives directly at data/vector_store/
+# GitHub Actions: snapshot_download puts files at data/vector_store/vector_store/
+# We auto-detect which is present so this script works in both environments.
+_BASE_PATH = Path("data/vector_store")
+_ACTIONS_PATH = _BASE_PATH / "vector_store"
+
+if (_ACTIONS_PATH / "chroma.sqlite3").exists():
+    CHROMA_PATH: str = str(_ACTIONS_PATH)
+    print(f"[PATH] GitHub Actions environment detected — using {CHROMA_PATH}")
+elif (_BASE_PATH / "chroma.sqlite3").exists():
+    CHROMA_PATH = str(_BASE_PATH)
+    print(f"[PATH] Local environment detected — using {CHROMA_PATH}")
+else:
+    raise FileNotFoundError(
+        "Cannot find chroma.sqlite3 in either data/vector_store/ "
+        "or data/vector_store/vector_store/. "
+        "Run download_vectorstore.py first."
+    )
+
 COLLECTION_NAME: str = "synthforge"  # FIXED: was "promptforge" — do not change
 CACHE_OUTPUT_PATH: Path = Path("deploy/bm25_cache.pkl")
 
