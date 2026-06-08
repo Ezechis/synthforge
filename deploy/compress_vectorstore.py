@@ -8,6 +8,10 @@ download time.
 
 Run this BEFORE upload_vectorstore.py, not after.
 
+Local path:          data/vector_store/chroma.sqlite3
+GitHub Actions path: data/vector_store/vector_store/chroma.sqlite3
+This script auto-detects which path is present.
+
 Usage:
     python deploy/compress_vectorstore.py
 """
@@ -21,8 +25,26 @@ from pathlib import Path
 # Constants
 # ---------------------------------------------------------------------------
 
-CHROMA_PATH: str = "data/vector_store"
 SQLITE_FILENAME: str = "chroma.sqlite3"
+
+# Auto-detect ChromaDB path — works in both local and GitHub Actions environments.
+# Local:          data/vector_store/chroma.sqlite3
+# GitHub Actions: data/vector_store/vector_store/chroma.sqlite3
+_BASE_PATH = Path("data/vector_store")
+_ACTIONS_PATH = _BASE_PATH / "vector_store"
+
+if (_ACTIONS_PATH / SQLITE_FILENAME).exists():
+    CHROMA_PATH: str = str(_ACTIONS_PATH)
+    print(f"[PATH] GitHub Actions environment detected — using {CHROMA_PATH}")
+elif (_BASE_PATH / SQLITE_FILENAME).exists():
+    CHROMA_PATH = str(_BASE_PATH)
+    print(f"[PATH] Local environment detected — using {CHROMA_PATH}")
+else:
+    raise FileNotFoundError(
+        "Cannot find chroma.sqlite3 in either data/vector_store/ "
+        "or data/vector_store/vector_store/. "
+        "Run download_vectorstore.py or chunk_and_embed.py first."
+    )
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,14 +81,14 @@ def compress_vectorstore() -> None:
 
     if not chroma_dir.exists():
         raise FileNotFoundError(
-            f"ChromaDB directory not found: {chroma_dir}. "
-            "Run chunk_and_embed.py first."
+            "ChromaDB directory not found: {}. "
+            "Run chunk_and_embed.py first.".format(chroma_dir)
         )
 
     if not sqlite_path.exists():
         raise FileNotFoundError(
-            f"SQLite file not found: {sqlite_path}. "
-            "ChromaDB may not have been initialised yet."
+            "SQLite file not found: {}. "
+            "ChromaDB may not have been initialised yet.".format(sqlite_path)
         )
 
     size_before = get_size_mb(chroma_dir)
@@ -78,7 +100,9 @@ def compress_vectorstore() -> None:
         conn.execute("VACUUM")
         conn.close()
     except sqlite3.Error as exc:
-        raise sqlite3.Error(f"VACUUM failed on {sqlite_path}: {exc}") from exc
+        raise sqlite3.Error(
+            "VACUUM failed on {}: {}".format(sqlite_path, exc)
+        ) from exc
 
     size_after = get_size_mb(chroma_dir)
     reduction = size_before - size_after
