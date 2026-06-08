@@ -34,7 +34,7 @@ jobs:
           path: |
             data/vector_store
             deploy/bm25_cache.pkl
-          key: vectorstore-${{ runner.os }}-${{ github.sha }}
+          key: vectorstore-${{ runner.os }}-weekly
           restore-keys: |
             vectorstore-${{ runner.os }}-
 
