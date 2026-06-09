@@ -16,7 +16,7 @@ on:
 
 jobs:
   transcribe:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, youtube-capable]
     timeout-minutes: 300  # 5-hour hard ceiling per batch of 30
 
     steps:
