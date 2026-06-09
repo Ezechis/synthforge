@@ -1,5 +1,5 @@
 """
-PromptForge - Reddit Public JSON Ingestion
+SynthForge - Reddit Public JSON Ingestion
 Layer 1: Fetches posts and comments from target subreddits using
 Reddit's public JSON API. No credentials required.
 Applies the 4-gate quality filter before corpus entry.
@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
+import praw
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -43,7 +44,7 @@ OUTPUT_DIR: Path = DATA_RAW / "reddit"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 HEADERS: dict[str, str] = {
-    "User-Agent": "PromptForge/0.1 research tool (read-only)",
+    "User-Agent": "SynthForge/0.1 research tool (read-only)",
 }
 
 RATE_LIMIT_PAUSE: float = 2.0
@@ -81,6 +82,88 @@ QUALITY_KEYWORDS: list[str] = [
 MIN_QUALITY_KEYWORD_HITS: int = 2
 MIN_TEXT_LENGTH: int = 100
 
+
+
+
+def _fetch_subreddit_posts(subreddit_name: str, limit: int = 100) -> list[dict]:
+    """Fetch top posts from a subreddit using authenticated PRAW.
+
+    Args:
+        subreddit_name: Name of the subreddit (without r/ prefix).
+        limit: Maximum number of posts to fetch.
+
+    Returns:
+        List of post dicts with title, selftext, score, url, author, created_utc.
+    """
+    reddit = _get_reddit_client()
+    subreddit = reddit.subreddit(subreddit_name)
+    posts = []
+    try:
+        for submission in subreddit.top(time_filter="year", limit=limit):
+            if submission.score < 50:
+                continue
+            posts.append({
+                "title": submission.title,
+                "selftext": submission.selftext,
+                "score": submission.score,
+                "url": submission.url,
+                "author": str(submission.author),
+                "created_utc": submission.created_utc,
+                "subreddit": subreddit_name,
+                "source": "reddit",
+                "credibility_tier": "community",
+            })
+        for submission in subreddit.hot(limit=limit):
+            if submission.score < 50:
+                continue
+            if not any(p["url"] == submission.url for p in posts):
+                posts.append({
+                    "title": submission.title,
+                    "selftext": submission.selftext,
+                    "score": submission.score,
+                    "url": submission.url,
+                    "author": str(submission.author),
+                    "created_utc": submission.created_utc,
+                    "subreddit": subreddit_name,
+                    "source": "reddit",
+                    "credibility_tier": "community",
+                })
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).error(
+            "PRAW fetch failed for r/%s: %s", subreddit_name, exc
+        )
+    return posts
+
+def _get_reddit_client() -> praw.Reddit:
+    """Initialise authenticated PRAW client from environment variables.
+
+    Reads REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME,
+    REDDIT_PASSWORD, and REDDIT_USER_AGENT from the environment.
+    Raises RuntimeError if any required variable is missing.
+    """
+    required = [
+        "REDDIT_CLIENT_ID",
+        "REDDIT_CLIENT_SECRET",
+        "REDDIT_USERNAME",
+        "REDDIT_PASSWORD",
+    ]
+    missing = [k for k in required if not os.environ.get(k)]
+    if missing:
+        raise RuntimeError(
+            f"Missing Reddit OAuth env vars: {missing}. "
+            "Set them in GitHub Secrets or local environment."
+        )
+    return praw.Reddit(
+        client_id=os.environ["REDDIT_CLIENT_ID"],
+        client_secret=os.environ["REDDIT_CLIENT_SECRET"],
+        username=os.environ["REDDIT_USERNAME"],
+        password=os.environ["REDDIT_PASSWORD"],
+        user_agent=os.environ.get(
+            "REDDIT_USER_AGENT",
+            "SynthForge-Ingest/1.0 by EzeDezighner"
+        ),
+    )
 
 def passes_gate_3(text: str) -> bool:
     """Gate 3 — keyword-based quality scoring.

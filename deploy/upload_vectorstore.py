@@ -1,3 +1,4 @@
+import time
 """
 upload_vectorstore.py — PromptForge Deployment Step 1
 ======================================================
@@ -24,7 +25,7 @@ from huggingface_hub import HfApi, create_repo
 # ---------------------------------------------------------------------------
 
 HF_USERNAME: str = "ezechinnabugwu"          # e.g. "ezeking"
-DATASET_REPO_NAME: str = "promptforge-vectorstore"  # will be created if absent
+DATASET_REPO_NAME: str = "synthforge-vectorstore"  # will be created if absent
 VECTOR_STORE_LOCAL_PATH: str = "data/vector_store"  # relative to project root
 
 # ---------------------------------------------------------------------------
@@ -38,6 +39,65 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+
+def _safe_upload_folder(
+    api,
+    folder_path: str,
+    repo_id: str,
+    path_in_repo: str,
+    repo_type: str = "dataset",
+    max_retries: int = 3,
+) -> None:
+    """Upload a folder to HuggingFace with retry on 429 Too Many Requests.
+
+    Args:
+        api: HfApi instance.
+        folder_path: Local folder to upload.
+        repo_id: HuggingFace repository ID.
+        path_in_repo: Target path inside the repository.
+        repo_type: Repository type (default: dataset).
+        max_retries: Number of retry attempts on 429 errors.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    # Ensure repo exists (safe — does not fail if already exists)
+    try:
+        api.create_repo(
+            repo_id=repo_id,
+            repo_type=repo_type,
+            exist_ok=True,
+            private=True,
+        )
+    except Exception as exc:
+        log.warning("create_repo warning (non-fatal): %s", exc)
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            _safe_upload_folder(api, 
+                folder_path=folder_path,
+                repo_id=repo_id,
+                path_in_repo=path_in_repo,
+                repo_type=repo_type,
+            )
+            log.info("Upload succeeded on attempt %d.", attempt)
+            return
+        except Exception as exc:
+            err_str = str(exc)
+            if "429" in err_str or "Too Many Requests" in err_str:
+                wait = 30 * attempt  # 30s, 60s, 90s
+                log.warning(
+                    "429 Too Many Requests on attempt %d/%d. "
+                    "Waiting %ds before retry...",
+                    attempt, max_retries, wait,
+                )
+                time.sleep(wait)
+            else:
+                raise
+    raise RuntimeError(
+        f"Upload to {repo_id} failed after {max_retries} attempts (429 rate limit)."
+    )
 
 def main() -> None:
     """Upload local ChromaDB directory to HF Dataset repo."""
@@ -80,7 +140,7 @@ def main() -> None:
         VECTOR_STORE_LOCAL_PATH,
     )
     try:
-        api.upload_folder(
+        _safe_upload_folder(api, 
             folder_path=str(vector_store_path),
             repo_id=repo_id,
             repo_type="dataset",
