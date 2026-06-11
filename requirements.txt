@@ -1,5 +1,10 @@
 chromadb==1.5.8
+dspy-ai>=2.5.0
+groq>=0.4.0
 huggingface-hub>=0.20.0
-sentence-transformers>=2.6.0  # Required for BGE-M3
-rank-bm25>=0.2.2
+optuna>=3.0.0
+praw>=7.7.0
 python-dotenv>=1.0.0
+rank-bm25>=0.2.2
+sentence-transformers>=2.6.0
+youtube-transcript-api>=0.0.6
