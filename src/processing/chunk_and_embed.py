@@ -40,7 +40,7 @@ CHUNK_SIZE_WORDS: int = 384       # ~512 tokens at 0.75 words/token
 CHUNK_OVERLAP_WORDS: int = 37     # ~50 token overlap
 VECTOR_STORE_PATH: str = "data/vector_store"
 COLLECTION_NAME: str = "synthforge"
-EMBEDDING_MODEL_NAME: str = "BAAI/bge-large-en-v1.5"
+EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"  # MIPROv2 standard
 BATCH_SIZE: int = 32
 MAX_RETRIES: int = 5
 RETRY_BASE_DELAY_SECONDS: float = 2.0
@@ -550,7 +550,7 @@ def load_book_chunks_into_collection(collection, jsonl_path: "Path") -> int:
         return 0
 
     # Load embedding model (same model as rest of pipeline)
-    EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"
+    EMBEDDING_MODEL = "BAAI/bge-m3"  # MIPROv2 standard
     print(f"[books] Loading embedding model: {EMBEDDING_MODEL}")
     model = SentenceTransformer(EMBEDDING_MODEL)
 
