@@ -222,9 +222,9 @@ def fetch_transcript_api(video_id: str) -> str | None:
         try:
             transcript_data = api.fetch(video_id, languages=CAPTION_LANGUAGES)
             full_text = " ".join(
-                seg.get("text", "").replace("\n", " ").strip()
+                seg.text.replace("\n", " ").strip()
                 for seg in transcript_data
-                if seg.get("text", "").strip()
+                if seg.text.strip()
             )
             if len(full_text) >= MIN_TRANSCRIPT_CHARS:
                 return full_text
@@ -242,18 +242,18 @@ def fetch_transcript_api(video_id: str) -> str | None:
                 if t.language_code.startswith("en"):
                     segments = t.fetch()
                     full_text = " ".join(
-                        seg.get("text", "").replace("\n", " ").strip()
+                        seg.text.replace("\n", " ").strip()
                         for seg in segments
-                        if seg.get("text", "").strip()
+                        if seg.text.strip()
                     )
                     if len(full_text) >= MIN_TRANSCRIPT_CHARS:
                         return full_text
             # Take whatever is available
             segments = available[0].fetch()
             full_text = " ".join(
-                seg.get("text", "").replace("\n", " ").strip()
+                seg.text.replace("\n", " ").strip()
                 for seg in segments
-                if seg.get("text", "").strip()
+                if seg.text.strip()
             )
             return full_text if len(full_text) >= MIN_TRANSCRIPT_CHARS else None
         except Exception as exc:
