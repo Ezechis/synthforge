@@ -157,7 +157,7 @@ def get_transcript(video_id: str) -> str:
         segments = YouTubeTranscriptApi.get_transcript(
             video_id, languages=["en", "en-US", "en-GB"], cookies="cookies.txt"
         )
-        return " ".join(seg["text"] for seg in segments).strip()
+        return " ".join(seg.text for seg in segments).strip()
     except (NoTranscriptFound, TranscriptsDisabled, VideoUnavailable):
         return ""
     except Exception as exc:
