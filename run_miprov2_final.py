@@ -14,6 +14,12 @@ Usage:
 
 import os
 import sys
+import random
+from pathlib import Path
+import json
+import logging
+import argparse
+import datetime
 
 # ── Step 1: Set in os.environ FIRST before any imports ───────────────────────
 GROQ_KEY = "***REMOVED***"
@@ -91,7 +97,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # Constants
-EVAL_PATH = Path("data/evals/PromptForge_Golden_Eval_Stratified_45k_clean.jsonl")
+EVAL_PATH = Path("data/evals/golden_eval_set.jsonl")
 VECTOR_STORE_PATH = Path("data/vector_store")
 COLLECTION_NAME = "synthforge"
 OUTPUT_DIR = Path("data/optimization")
@@ -215,9 +221,29 @@ dev_size = args.dev_size
 max_steps = args.max_steps
 
 log.info("Loading eval records from %s", EVAL_PATH)
+if not EVAL_PATH.exists():
+    log.error("Eval file not found: %s", EVAL_PATH)
+    sys.exit(1)
+
 records = load_eval_records(EVAL_PATH)
+if not records:
+    log.error("No records found in eval file: %s", EVAL_PATH)
+    sys.exit(1)
+
 total_needed = train_size + dev_size
+if len(records) < total_needed:
+    log.error(
+        "Not enough records in eval file. Needed: %d, available: %d",
+        total_needed,
+        len(records),
+    )
+    sys.exit(1)
+
 log.info("Loaded %d records. Using %d train + %d dev.", len(records), train_size, dev_size)
+
+# Shuffle with fixed seed for reproducibility
+random.seed(RANDOM_SEED)
+random.shuffle(records)
 
 train_records = records[:train_size]
 dev_records = records[train_size:train_size + dev_size]
