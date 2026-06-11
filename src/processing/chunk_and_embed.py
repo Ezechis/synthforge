@@ -419,6 +419,10 @@ def process_json_file(
                 "title": item.get("title", json_path.stem),
                 "file": json_path.name,
                 "era":  assign_era(item.get("created_utc", item.get("date", ""))),
+                # MIPROv2 additions
+                "version": "MIPROv2",
+                "model": EMBEDDING_MODEL_NAME,
+                "chunk_strategy": "sentence-aware",
             }
             item_new_chunks = [item_chunks[i] for i in item_new_idx]
             item_new_ids = [item_ids[i] for i in item_new_idx]
@@ -489,6 +493,10 @@ def process_json_file(
                 metadata_source.get("published", metadata_source.get("created_utc", "")),
             )
         ),
+        # MIPROv2 additions
+        "version": "MIPROv2",
+        "model": EMBEDDING_MODEL_NAME,
+        "chunk_strategy": "sentence-aware",
     }
 
     new_chunks = [chunks[i] for i in new_idx]
