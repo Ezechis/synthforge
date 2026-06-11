@@ -38,7 +38,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Tuple
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -167,13 +167,20 @@ def is_relevant(title: str) -> bool:
 def build_pending_list(
     channels: list[dict[str, str]],
     progress: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Build the list of videos pending transcription."""
+) -> Tuple[list[dict[str, Any]], int]:
+    """Build the list of videos pending transcription and total universe count.
+
+    Returns:
+        Tuple of (pending_videos, total_universe) where:
+        - pending_videos: list of videos not yet processed (completed/failed/no-transcript)
+        - total_universe: total number of relevant videos across all channels (within duration bounds)
+    """
     completed_ids: set[str] = set(progress.get("completed_ids", []))
     failed_ids: set[str] = set(progress.get("failed_ids", []))
     no_transcript_ids: set[str] = set(progress.get("no_transcript_ids", []))
     skip_ids = completed_ids | failed_ids | no_transcript_ids
     pending: list[dict[str, Any]] = []
+    total_universe = 0
 
     for channel in channels:
         logger.info("Fetching video list: %s", channel["handle"])
@@ -182,18 +189,21 @@ def build_pending_list(
         for video in videos:
             vid_id = video["id"]
             duration = video["duration"]
-            if vid_id in skip_ids:
-                continue
             if not (duration == 300 or (60 < duration < MAX_DURATION_SECONDS)):
                 continue
             if not is_relevant(video["title"]):
+                continue
+            # Count this video toward the universe
+            total_universe += 1
+            if vid_id in skip_ids:
                 continue
             video["channel_name"] = channel["name"]
             pending.append(video)
         time.sleep(1)
 
     logger.info("Total pending videos: %d", len(pending))
-    return pending
+    logger.info("Total universe (eligible videos): %d", total_universe)
+    return pending, total_universe
 
 
 # ---------------------------------------------------------------------------
@@ -424,7 +434,7 @@ def run_batch(batch_size: int, progress_file: Path, output_dir: Path) -> None:
     groq_api_key = os.environ.get("GROQ_API_KEY", "")
     output_dir.mkdir(parents=True, exist_ok=True)
     progress = load_progress(progress_file)
-    pending = build_pending_list(CHANNELS, progress)
+    pending, total_universe = build_pending_list(CHANNELS, progress)
 
     if not pending:
         logger.info("No pending videos. All channels up to date.")
@@ -458,7 +468,7 @@ def run_batch(batch_size: int, progress_file: Path, output_dir: Path) -> None:
     logger.info("Whisper  (Tier 2) : %d", stats["success_whisper"])
     logger.info("No transcript      : %d", stats["no_transcript"])
     logger.info("Failed             : %d", stats["failed"])
-    logger.info("Total completed    : %d / 947", progress["completed_count"])
+    logger.info("Total completed    : %d / %d", progress["completed_count"], total_universe)
 
 
 def main() -> None:
