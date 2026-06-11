@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 DENSE_TOP_K: int = 20
 BM25_TOP_K: int = 20
 RERANK_TOP_N: int = 8
-CROSS_ENCODER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+CROSS_ENCODER_MODEL: str = "BAAI/bge-reranker-large"  # MIPROv2 uses better reranker
 
 ARXIV_SIGNALS: list[str] = [
     "paper", "study", "research", "evidence", "empirical",

@@ -60,7 +60,7 @@ CHUNK_SIZE_TOKENS: int = 512
 CHUNK_OVERLAP_TOKENS: int = 50
 
 #  Embedding 
-EMBEDDING_MODEL: str = "BAAI/bge-large-en-v1.5"
+EMBEDDING_MODEL: str = "BAAI/bge-m3"  # MIPROv2 uses newer bge-m3 model
 
 #  Generation 
 OLLAMA_MODEL: str = "llama3:8b"
