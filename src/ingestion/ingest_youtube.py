@@ -1,5 +1,5 @@
 """
-ingest_youtube.py -- PromptForge Layer 1: YouTube Transcript Source
+ingest_youtube.py -- SynthForge Layer 1: YouTube Transcript Source
 ===================================================================
 Fetches transcripts from curated LLM and prompt engineering playlists
 using yt-dlp (video ID extraction) and youtube-transcript-api (captions).
