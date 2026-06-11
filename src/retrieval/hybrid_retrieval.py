@@ -1,5 +1,5 @@
 """
-PromptForge - Hybrid Retrieval System
+SynthForge - Hybrid Retrieval System
 Layer 4: Combines dense vector search (ChromaDB) with sparse BM25
 keyword search, then reranks results using a cross-encoder model.
 Query routing weights retrieval based on detected query type.
@@ -88,8 +88,8 @@ class QueryRouter:
         }
 
 
-class PromptForgeRetriever:
-    """Hybrid retrieval system for PromptForge."""
+class SynthForgeRetriever:
+    """Hybrid retrieval system for SynthForge."""
 
     def __init__(self) -> None:
         """Initialise all retrieval components."""
@@ -103,7 +103,7 @@ class PromptForgeRetriever:
         self.chroma_client = chromadb.PersistentClient(
             path=str(VECTOR_STORE_DIR)
         )
-        self.collection = self.chroma_client.get_collection("promptforge")
+        self.collection = self.chroma_client.get_collection("synthforge")
 
         logger.info("Building BM25 index...")
         self.bm25, self.bm25_docs, self.bm25_metadatas = (
@@ -316,7 +316,7 @@ class PromptForgeRetriever:
 
 def test_retrieval() -> None:
     """Run a test query to verify the retrieval pipeline."""
-    retriever = PromptForgeRetriever()
+    retriever = SynthForgeRetriever()
     test_query = (
         "What is chain-of-thought prompting and what is "
         "the empirical evidence for it?"

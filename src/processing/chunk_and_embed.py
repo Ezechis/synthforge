@@ -1,5 +1,5 @@
 """
-chunk_and_embed.py — PromptForge Layer 2 + Layer 3
+chunk_and_embed.py — SynthForge Layer 2 + Layer 3
 ===================================================
 Reads raw JSON files from data/raw/, chunks them into sentence-aware
 segments, embeds with bge-large-en-v1.5, and stores in ChromaDB.
@@ -27,6 +27,10 @@ from typing import Any
 import chromadb
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
+import json
+from pathlib import Path
+
+BOOKS_JSONL_PATH = Path("data") / "book_all_chunks.jsonl"
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -35,7 +39,7 @@ from sentence_transformers import SentenceTransformer
 CHUNK_SIZE_WORDS: int = 384       # ~512 tokens at 0.75 words/token
 CHUNK_OVERLAP_WORDS: int = 37     # ~50 token overlap
 VECTOR_STORE_PATH: str = "data/vector_store"
-COLLECTION_NAME: str = "promptforge"
+COLLECTION_NAME: str = "synthforge"
 EMBEDDING_MODEL_NAME: str = "BAAI/bge-large-en-v1.5"
 BATCH_SIZE: int = 32
 MAX_RETRIES: int = 5
@@ -70,7 +74,7 @@ _CREDIBILITY_MAP: dict[str, str] = {
 def assign_era(date_value: Any) -> str:
     """Classify a document date into a broad era string.
 
-    Handles three formats found across the PromptForge corpus:
+    Handles three formats found across the SynthForge corpus:
       - ISO 8601 strings: "2023-05-15", "2023-05-15T10:30:00Z"
       - Unix timestamps (int or float): 1684123456
       - Empty string or None: defaults to "2025-2026" (current era)
@@ -122,7 +126,7 @@ def assign_era(date_value: Any) -> str:
 def assign_era(date_value: Any) -> str:
     """Classify a document date into a broad era string.
 
-    Handles three formats found across the PromptForge corpus:
+    Handles three formats found across the SynthForge corpus:
       - ISO 8601 strings: "2023-05-15", "2023-05-15T10:30:00Z"
       - Unix timestamps (int or float): 1684123456
       - Empty string or None: defaults to "2025-2026" (current era)
@@ -169,6 +173,7 @@ def assign_era(date_value: Any) -> str:
 # Logging
 # ---------------------------------------------------------------------------
 
+os.makedirs("logs", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s",
@@ -509,6 +514,81 @@ def process_json_file(
 
     return stored, skipped
 
+# ═══════════════════════════════════════════════════════════════════
+# PASTE THIS FUNCTION INTO chunk_and_embed.py
+# ═══════════════════════════════════════════════════════════════════
+
+def load_book_chunks_into_collection(collection, jsonl_path: "Path") -> int:
+    """
+    Load pre-chunked book data from BookIngestor JSONL output into ChromaDB.
+
+    Books are pre-chunked by ingest_books.py (which uses the shared ForgeCore
+    chunker). This function embeds them and upserts into the collection,
+    exactly as chunk_and_embed.py does for all other sources.
+
+    Args:
+        collection: ChromaDB collection object (already open).
+        jsonl_path: Path to data/book_all_chunks.jsonl
+
+    Returns:
+        Number of chunks added/updated.
+    """
+    import json
+    from pathlib import Path
+    from sentence_transformers import SentenceTransformer
+
+    if not jsonl_path.exists():
+        print(f"[books] No JSONL found at {jsonl_path} — skipping book ingestion.")
+        return 0
+
+    # Load embedding model (same model as rest of pipeline)
+    EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"
+    print(f"[books] Loading embedding model: {EMBEDDING_MODEL}")
+    model = SentenceTransformer(EMBEDDING_MODEL)
+
+    records = []
+    with open(jsonl_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            stripped = line.strip()
+            if stripped:
+                records.append(json.loads(stripped))
+
+    if not records:
+        print("[books] JSONL file is empty — nothing to embed.")
+        return 0
+   # Deduplicate by ID — same chunk may appear from overlapping sections
+    seen: set = set()
+    records = [r for r in records if r["id"] not in seen and not seen.add(r["id"])]
+    print(f"[books] After dedup: {len(records)} unique chunks.")
+
+    print(f"[books] Embedding {len(records)} book chunks...")
+
+    # Process in batches (matches existing BATCH_SIZE constant in chunk_and_embed.py)
+    BATCH_SIZE = 32  # must match existing pipeline constant
+    total_upserted = 0
+
+    for i in range(0, len(records), BATCH_SIZE):
+        batch = records[i : i + BATCH_SIZE]
+        texts = [r["text"] for r in batch]
+        ids = [r["id"] for r in batch]
+        metas = [r["meta"] for r in batch]
+
+        embeddings = model.encode(texts, show_progress_bar=False).tolist()
+
+        collection.upsert(
+            ids=ids,
+            documents=texts,
+            embeddings=embeddings,
+            metadatas=metas,
+        )
+        total_upserted += len(batch)
+        if (i // BATCH_SIZE) % 10 == 0:
+            print(f"  [books] {total_upserted}/{len(records)} chunks embedded...")
+
+    print(f"[books] ✅ {total_upserted} book chunks upserted into collection.")
+    return total_upserted
+
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -518,7 +598,7 @@ def main() -> None:
     """Run the full chunk-and-embed pipeline across all raw data directories."""
     os.makedirs("logs", exist_ok=True)
     logger.info("=" * 70)
-    logger.info("PromptForge chunk_and_embed.py — starting pipeline")
+    logger.info("SynthForge chunk_and_embed.py — starting pipeline")
 
     logger.info("Loading embedding model: %s", EMBEDDING_MODEL_NAME)
     try:
@@ -596,6 +676,10 @@ def main() -> None:
                 logger.info("%s: %d chunks stored, %d skipped.", json_path.name, stored, skipped)
             elif skipped > 0:
                 logger.info("%s: all %d chunks already embedded — skipping.", json_path.name, skipped)
+
+    # -- Load pre-chunked book data from BookIngestor --------------
+    book_chunks_added = load_book_chunks_into_collection(collection,  BOOKS_JSONL_PATH)
+    logger.info("Book chunks added to corpus: %d", book_chunks_added)
 
     final_count = collection.count()
     logger.info("=" * 70)
