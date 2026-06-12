@@ -1,5 +1,5 @@
 # .github/workflows/eval_after_ingest.yml
-# PromptForge — Automated Quality Regression Eval
+# SynthForge — Automated Quality Regression Eval
 # ==================================================
 # Runs after every successful daily_arxiv ingestion.
 # Executes run_evals.py against the golden eval set (sample of 20 queries).

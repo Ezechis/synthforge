@@ -38,9 +38,23 @@ BOOKS_JSONL_PATH = Path("data") / "book_all_chunks.jsonl"
 
 CHUNK_SIZE_WORDS: int = 384       # ~512 tokens at 0.75 words/token
 CHUNK_OVERLAP_WORDS: int = 37     # ~50 token overlap
-VECTOR_STORE_PATH: str = "data/vector_store"
+
+# Local environment: ChromaDB lives directly at data/vector_store/
+# GitHub Actions: snapshot_download nests it at data/vector_store/vector_store/
+# Same auto-detect as compress_vectorstore.py / build_bm25_cache.py — without
+# this, Actions runs create a fresh empty collection and new chunks never
+# join the real corpus.
+_BASE_STORE_PATH = Path("data/vector_store")
+_ACTIONS_STORE_PATH = _BASE_STORE_PATH / "vector_store"
+if (_ACTIONS_STORE_PATH / "chroma.sqlite3").exists():
+    VECTOR_STORE_PATH: str = str(_ACTIONS_STORE_PATH)
+else:
+    VECTOR_STORE_PATH = str(_BASE_STORE_PATH)
+
 COLLECTION_NAME: str = "synthforge"
-EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"  # MIPROv2 standard
+# Must match the model the existing corpus was embedded with AND the Space's
+# query-time model (bge-large-en-v1.5). Mixing models corrupts retrieval silently.
+EMBEDDING_MODEL_NAME: str = "BAAI/bge-large-en-v1.5"
 BATCH_SIZE: int = 32
 MAX_RETRIES: int = 5
 RETRY_BASE_DELAY_SECONDS: float = 2.0
@@ -550,7 +564,7 @@ def load_book_chunks_into_collection(collection, jsonl_path: "Path") -> int:
         return 0
 
     # Load embedding model (same model as rest of pipeline)
-    EMBEDDING_MODEL = "BAAI/bge-m3"  # MIPROv2 standard
+    EMBEDDING_MODEL = EMBEDDING_MODEL_NAME
     print(f"[books] Loading embedding model: {EMBEDDING_MODEL}")
     model = SentenceTransformer(EMBEDDING_MODEL)
 
@@ -616,16 +630,21 @@ def main() -> None:
         logger.critical("Failed to load embedding model: %s", exc)
         raise
 
-    os.makedirs(VECTOR_STORE_PATH, exist_ok=True)
+    if not (Path(VECTOR_STORE_PATH) / "chroma.sqlite3").exists():
+        logger.critical(
+            "No chroma.sqlite3 found at %s — refusing to create a new store. "
+            "Run deploy/download_vectorstore.py first.",
+            VECTOR_STORE_PATH,
+        )
+        raise FileNotFoundError(f"{VECTOR_STORE_PATH}/chroma.sqlite3")
     try:
         client = chromadb.PersistentClient(
             path=VECTOR_STORE_PATH,
             settings=Settings(anonymized_telemetry=False),
         )
-        collection = client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"},
-        )
+        # Open-only — NEVER get_or_create_collection. A ghost second
+        # collection corrupted this corpus before (see CLAUDE.md).
+        collection = client.get_collection(name=COLLECTION_NAME)
         logger.info("ChromaDB connected. Collection has %d chunks.", collection.count())
     except Exception as exc:
         logger.critical("ChromaDB connection failed: %s", exc)
@@ -665,10 +684,7 @@ def main() -> None:
                             path=VECTOR_STORE_PATH,
                             settings=Settings(anonymized_telemetry=False),
                         )
-                        collection = client.get_or_create_collection(
-                            name=COLLECTION_NAME,
-                            metadata={"hnsw:space": "cosine"},
-                        )
+                        collection = client.get_collection(name=COLLECTION_NAME)
                         existing_ids = get_existing_ids(collection)
                         stored, skipped = 0, 0
                     else:

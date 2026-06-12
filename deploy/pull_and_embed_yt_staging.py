@@ -39,7 +39,16 @@ from sentence_transformers import SentenceTransformer
 STAGING_REPO_ID: str = "ezechinnabugwu/synthforge-yt-staging"
 STAGING_TRANSCRIPTS_SUBDIR: str = "transcripts"
 
-LOCAL_VECTORSTORE_PATH: str = "data/vector_store"
+# Local environment: ChromaDB lives directly at data/vector_store/
+# GitHub Actions: snapshot_download nests it at data/vector_store/vector_store/
+# Same auto-detect as compress_vectorstore.py / build_bm25_cache.py.
+_BASE_STORE_PATH = Path("data/vector_store")
+_ACTIONS_STORE_PATH = _BASE_STORE_PATH / "vector_store"
+if (_ACTIONS_STORE_PATH / "chroma.sqlite3").exists():
+    LOCAL_VECTORSTORE_PATH: str = str(_ACTIONS_STORE_PATH)
+else:
+    LOCAL_VECTORSTORE_PATH = str(_BASE_STORE_PATH)
+
 COLLECTION_NAME: str = "synthforge"
 
 # Must match the embedding model used by chunk_and_embed.py everywhere
@@ -50,6 +59,10 @@ CHROMA_BATCH_SIZE: int = 32
 
 # Track which staging files have already been embedded
 EMBEDDED_TRACKER_PATH: Path = Path("data/yt_staging_embedded.json")
+
+# Written at the end of every run so CI can skip the publish steps when
+# nothing new was embedded (avoids re-uploading an unchanged ~600MB store).
+EMBED_ADDED_COUNT_PATH: Path = Path("data/yt_embed_added.txt")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -235,6 +248,8 @@ def main() -> None:
 
     if not pending_filenames:
         logger.info("No new staging files to embed. Corpus is already up to date.")
+        EMBED_ADDED_COUNT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        EMBED_ADDED_COUNT_PATH.write_text("0", encoding="utf-8")
         return
 
     logger.info("%d new staging files to embed", len(pending_filenames))
@@ -310,6 +325,8 @@ def main() -> None:
         count_after,
         count_before,
     )
+    EMBED_ADDED_COUNT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    EMBED_ADDED_COUNT_PATH.write_text(str(total_chunks_added), encoding="utf-8")
     logger.info(
         "Next step: run the standard corpus update sequence "
         "(compress → build_bm25_cache → upload_vectorstore → restart Space)"

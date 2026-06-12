@@ -1,32 +1,44 @@
-import time
 """
 upload_vectorstore.py — PromptForge Deployment Step 1
 ======================================================
 Uploads the local ChromaDB vector store to a Hugging Face Dataset repo
 so HF Spaces can download it on cold start.
 
-Run ONCE from C:\\Users\\Ezeking\\PromptForge after embedding is complete:
-    C:\\Users\\Ezeking\\AppData\\Local\\Programs\\Python\\Python311\\python.exe deploy/upload_vectorstore.py
+Works in both environments:
+    Local:          data/vector_store/chroma.sqlite3
+    GitHub Actions: data/vector_store/vector_store/chroma.sqlite3
+                    (snapshot_download nests the repo's vector_store/ folder)
+The correct directory is auto-detected, same as compress_vectorstore.py
+and build_bm25_cache.py.
+
+Auth: uses the HF_TOKEN environment variable when set (GitHub Actions),
+otherwise the cached `huggingface-cli login` token (local).
 
 Prerequisites:
     pip install huggingface_hub
-    huggingface-cli login   (paste your HF token when prompted)
 """
 
 import logging
-import os
 import sys
+import time
 from pathlib import Path
 
 from huggingface_hub import HfApi, create_repo
 
 # ---------------------------------------------------------------------------
-# Configuration — edit these two values before running
+# Configuration
 # ---------------------------------------------------------------------------
 
-HF_USERNAME: str = "ezechinnabugwu"          # e.g. "ezeking"
-DATASET_REPO_NAME: str = "synthforge-vectorstore"  # will be created if absent
-VECTOR_STORE_LOCAL_PATH: str = "data/vector_store"  # relative to project root
+HF_USERNAME: str = "ezechinnabugwu"
+DATASET_REPO_NAME: str = "synthforge-vectorstore"
+
+# Auto-detect the directory that actually contains chroma.sqlite3.
+_BASE_STORE_PATH = Path("data/vector_store")
+_ACTIONS_STORE_PATH = _BASE_STORE_PATH / "vector_store"
+if (_ACTIONS_STORE_PATH / "chroma.sqlite3").exists():
+    VECTOR_STORE_LOCAL_PATH: str = str(_ACTIONS_STORE_PATH)
+else:
+    VECTOR_STORE_LOCAL_PATH = str(_BASE_STORE_PATH)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -40,54 +52,27 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-
-def _safe_upload_folder(
-    api,
-    folder_path: str,
-    repo_id: str,
-    path_in_repo: str,
-    repo_type: str = "dataset",
-    max_retries: int = 3,
-) -> None:
+def _safe_upload_folder(api: HfApi, max_retries: int = 3, **upload_kwargs) -> None:
     """Upload a folder to HuggingFace with retry on 429 Too Many Requests.
 
     Args:
         api: HfApi instance.
-        folder_path: Local folder to upload.
-        repo_id: HuggingFace repository ID.
-        path_in_repo: Target path inside the repository.
-        repo_type: Repository type (default: dataset).
         max_retries: Number of retry attempts on 429 errors.
+        **upload_kwargs: Passed straight through to api.upload_folder
+            (folder_path, repo_id, repo_type, path_in_repo, commit_message...).
     """
-    import logging
-    log = logging.getLogger(__name__)
-
-    # Ensure repo exists (safe — does not fail if already exists)
-    try:
-        api.create_repo(
-            repo_id=repo_id,
-            repo_type=repo_type,
-            exist_ok=True,
-            private=True,
-        )
-    except Exception as exc:
-        log.warning("create_repo warning (non-fatal): %s", exc)
-
+    last_exc: Exception | None = None
     for attempt in range(1, max_retries + 1):
         try:
-            _safe_upload_folder(api, 
-                folder_path=folder_path,
-                repo_id=repo_id,
-                path_in_repo=path_in_repo,
-                repo_type=repo_type,
-            )
-            log.info("Upload succeeded on attempt %d.", attempt)
+            api.upload_folder(**upload_kwargs)
+            logger.info("Upload succeeded on attempt %d.", attempt)
             return
         except Exception as exc:
             err_str = str(exc)
             if "429" in err_str or "Too Many Requests" in err_str:
+                last_exc = exc
                 wait = 30 * attempt  # 30s, 60s, 90s
-                log.warning(
+                logger.warning(
                     "429 Too Many Requests on attempt %d/%d. "
                     "Waiting %ds before retry...",
                     attempt, max_retries, wait,
@@ -96,26 +81,23 @@ def _safe_upload_folder(
             else:
                 raise
     raise RuntimeError(
-        f"Upload to {repo_id} failed after {max_retries} attempts (429 rate limit)."
-    )
+        f"Upload to {upload_kwargs.get('repo_id')} failed after "
+        f"{max_retries} attempts (429 rate limit)."
+    ) from last_exc
+
 
 def main() -> None:
     """Upload local ChromaDB directory to HF Dataset repo."""
 
-    if HF_USERNAME == "YOUR_HF_USERNAME":
-        logger.error(
-            "Edit HF_USERNAME in this script before running. "
-            "Set it to your actual Hugging Face username."
-        )
-        sys.exit(1)
-
     vector_store_path = Path(VECTOR_STORE_LOCAL_PATH)
-    if not vector_store_path.exists():
+    if not (vector_store_path / "chroma.sqlite3").exists():
         logger.error(
-            "Vector store not found at: %s — run chunk_and_embed.py first.",
+            "chroma.sqlite3 not found at: %s — run chunk_and_embed.py "
+            "(or download_vectorstore.py) first.",
             VECTOR_STORE_LOCAL_PATH,
         )
         sys.exit(1)
+    logger.info("Uploading vector store directory: %s", VECTOR_STORE_LOCAL_PATH)
 
     repo_id = f"{HF_USERNAME}/{DATASET_REPO_NAME}"
     api = HfApi()
@@ -140,12 +122,13 @@ def main() -> None:
         VECTOR_STORE_LOCAL_PATH,
     )
     try:
-        _safe_upload_folder(api, 
+        _safe_upload_folder(
+            api,
             folder_path=str(vector_store_path),
             repo_id=repo_id,
             repo_type="dataset",
             path_in_repo="vector_store",   # Stored at root/vector_store/ in the repo
-            commit_message="Upload ChromaDB vector store",
+            commit_message="Update ChromaDB vector store",
         )
         logger.info("Upload complete.")
         logger.info("Dataset URL: https://huggingface.co/datasets/%s", repo_id)
@@ -163,7 +146,7 @@ def main() -> None:
                 path_in_repo="bm25_cache.pkl",
                 repo_id=repo_id,
                 repo_type="dataset",
-                commit_message="Upload BM25 cache",
+                commit_message="Update BM25 cache",
             )
             logger.info("BM25 cache uploaded.")
         except Exception as exc:

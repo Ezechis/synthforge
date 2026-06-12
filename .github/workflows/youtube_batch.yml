@@ -1,13 +1,14 @@
 name: YouTube Batch Transcription
 
 # Runs daily at 06:00 UTC (07:00 WAT).
-# This workflow ONLY transcribes — it does NOT embed or touch ChromaDB.
-# Transcripts are staged to HF Dataset: ezechinnabugwu/synthforge-yt-staging
-# Local machine pulls staging and embeds during the normal corpus update sequence.
-#
-# This separation is the key reliability fix:
-#   - Transcription on GH Actions = yt-dlp + Groq API only (no 971MB DB round-trip)
-#   - Embedding on local machine = full ChromaDB control, no disk space risk
+# Pipeline per run:
+#   1. Transcribe up to 30 videos (yt-dlp + Groq Whisper / caption API)
+#   2. Stage transcripts to HF Dataset: ezechinnabugwu/synthforge-yt-staging
+#   3. Download the current vectorstore, embed all not-yet-embedded staged
+#      transcripts into ChromaDB (deploy/pull_and_embed_yt_staging.py)
+#   4. Compress + rebuild BM25 cache + upload the updated vectorstore to
+#      HF Dataset, then restart the Space — same publish sequence as
+#      daily_arxiv.yml. Publish steps are skipped when nothing new embedded.
 
 on:
   schedule:
@@ -37,7 +38,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install transcription dependencies only
+      - name: Install transcription dependencies
         run: |
           pip install --upgrade pip
           # Transcription pipeline — deliberately minimal to keep install fast
@@ -45,8 +46,6 @@ jobs:
           pip install groq>=0.5.0
           pip install huggingface-hub>=0.23.0
           pip install youtube-transcript-api>=0.6.0
-          # NO chromadb, NO sentence-transformers, NO rank-bm25
-          # Those are for embedding — handled locally, not here
 
       - name: Pull current progress tracker from HF staging
         env:
@@ -160,3 +159,109 @@ jobs:
           print(f"Remaining : {remaining}")
           print(f"Failed IDs: {failed}")
           EOF
+
+      # ──────────────────────────────────────────────────────────────────
+      # Embed + publish — absorb ALL staged transcripts not yet embedded
+      # into ChromaDB and push the updated vectorstore to HF.
+      # ──────────────────────────────────────────────────────────────────
+
+      - name: Install embedding dependencies
+        run: |
+          pip install chromadb==1.5.8
+          pip install "sentence-transformers>=2.7.0"
+          pip install "rank-bm25>=0.2.2"
+
+      - name: Download current vectorstore from HF Dataset
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+        run: python deploy/download_vectorstore.py
+
+      - name: Pull embedded-files tracker from HF staging
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python - <<'EOF'
+          import os, pathlib, shutil
+          from huggingface_hub import hf_hub_download
+
+          pathlib.Path("data").mkdir(exist_ok=True)
+          try:
+              cached = hf_hub_download(
+                  repo_id="ezechinnabugwu/synthforge-yt-staging",
+                  filename="yt_staging_embedded.json",
+                  repo_type="dataset",
+                  token=os.environ["HF_TOKEN"],
+              )
+              shutil.copy(cached, "data/yt_staging_embedded.json")
+              print("Embedded-files tracker pulled from staging.")
+          except Exception as e:
+              print(f"No embedded tracker yet (first embed run): {e}")
+          EOF
+
+      - name: Embed staged transcripts into ChromaDB
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python deploy/pull_and_embed_yt_staging.py
+
+      - name: Check whether new chunks were embedded
+        id: embed_check
+        run: |
+          ADDED=$(cat data/yt_embed_added.txt 2>/dev/null || echo 0)
+          echo "added=$ADDED" >> "$GITHUB_OUTPUT"
+          echo "New chunks embedded this run: $ADDED"
+
+      - name: Compress vectorstore (SQLite VACUUM)
+        if: steps.embed_check.outputs.added != '0'
+        run: python deploy/compress_vectorstore.py
+
+      - name: Build BM25 cache
+        if: steps.embed_check.outputs.added != '0'
+        run: python deploy/build_bm25_cache.py
+
+      - name: Upload vectorstore to HF Dataset
+        if: steps.embed_check.outputs.added != '0'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+        run: python deploy/upload_vectorstore.py
+
+      # Push the tracker only AFTER the vectorstore upload succeeds —
+      # otherwise a failed upload would mark files as embedded while their
+      # chunks never reached the published store.
+      - name: Push embedded-files tracker to HF staging
+        if: steps.embed_check.outputs.added != '0'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python - <<'EOF'
+          import os, pathlib
+          from huggingface_hub import HfApi
+
+          tracker = pathlib.Path("data/yt_staging_embedded.json")
+          if tracker.exists():
+              HfApi(token=os.environ["HF_TOKEN"]).upload_file(
+                  path_or_fileobj=str(tracker),
+                  path_in_repo="yt_staging_embedded.json",
+                  repo_id="ezechinnabugwu/synthforge-yt-staging",
+                  repo_type="dataset",
+              )
+              print("Embedded-files tracker pushed to staging.")
+          else:
+              print("No tracker file produced — nothing to push.")
+          EOF
+
+      - name: Restart HF Space
+        if: steps.embed_check.outputs.added != '0'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
+        run: |
+          python -c "
+          import os
+          from huggingface_hub import HfApi
+          api = HfApi(token=os.environ['HF_TOKEN'])
+          space_id = os.environ.get('HF_SPACE_ID', 'ezechinnabugwu/synthforge')
+          api.restart_space(repo_id=space_id)
+          print(f'Space restart triggered: {space_id}')
+          "

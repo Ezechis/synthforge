@@ -60,8 +60,7 @@ CHUNK_SIZE_TOKENS: int = 512
 CHUNK_OVERLAP_TOKENS: int = 50
 
 #  Embedding 
-EMBEDDING_MODEL: str = "BAAI/bge-m3"  # MIPROv2 uses newer bge-m3 model
-
+EMBEDDING_MODEL: str = "BAAI/bge-large-en-v1.5"  # MUST match corpus + Space query model
 #  Generation 
 OLLAMA_MODEL: str = "llama3:8b"
 OLLAMA_BASE_URL: str = "http://localhost:11434"
