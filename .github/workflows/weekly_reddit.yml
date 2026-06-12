@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install --upgrade huggingface_hub pyyaml chromadb rank-bm25
+          pip install --upgrade huggingface_hub pyyaml chromadb==1.5.8 rank-bm25 praw
 
       - name: Cache vectorstore + BM25 cache
         id: cache
@@ -39,8 +39,6 @@ jobs:
             vectorstore-${{ runner.os }}-
 
       - name: Download vectorstore from HF (only if cache miss)
-        if: steps.cache.outputs.cache-hit != 'true'
-        continue-on-error: true
         run: python deploy/download_vectorstore.py
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
