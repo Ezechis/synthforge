@@ -1,5 +1,5 @@
 """
-ingest_arxiv_expand.py -- PromptForge arXiv Corpus Expansion
+ingest_arxiv_expand.py -- SynthForge arXiv Corpus Expansion
 ============================================================
 Expands the arXiv corpus from ~200 to 500+ papers by searching
 topic-by-topic across the core prompt engineering literature.

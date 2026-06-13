@@ -74,7 +74,7 @@ REQUEST_DELAY_SECONDS: float = 2.0
 
 # User-Agent required by Reddit — identify yourself
 HEADERS: dict[str, str] = {
-    "User-Agent": "PromptForge/1.0 (academic research; prompt engineering knowledge base)",
+    "User-Agent": "SynthForge/1.0 (academic research; prompt engineering knowledge base)",
 }
 
 

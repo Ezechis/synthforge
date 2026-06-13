@@ -1,4 +1,4 @@
-# Adds persistent search history to PromptForge HF Space UI.
+# Adds persistent search history to SynthForge HF Space UI.
 # Three patches to hf_space/app.py:
 #   1. Initialize history list in session state
 #   2. Append each query+answer to history after generation

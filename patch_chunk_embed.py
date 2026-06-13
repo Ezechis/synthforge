@@ -1,7 +1,7 @@
 """
 patch_chunk_embed.py
 ====================
-Run this once from C:\\Users\\Ezeking\\PromptForge to overwrite
+Run this once from C:\\Users\\Ezeking\\SynthForge to overwrite
 src/processing/chunk_and_embed.py with the corrected version.
 
     C:\\Users\\Ezeking\\AppData\\Local\\Programs\\Python\\Python311\\python.exe patch_chunk_embed.py
@@ -12,7 +12,7 @@ import os
 TARGET = os.path.join("src", "processing", "chunk_and_embed.py")
 
 NEW_CONTENT = '''"""
-chunk_and_embed.py — PromptForge Layer 2 + Layer 3
+chunk_and_embed.py — SynthForge Layer 2 + Layer 3
 ===================================================
 Reads raw JSON files from data/raw/, chunks them into sentence-aware
 segments, embeds with bge-large-en-v1.5, and stores in ChromaDB.
@@ -48,7 +48,7 @@ from sentence_transformers import SentenceTransformer
 CHUNK_SIZE_WORDS: int = 384       # ~512 tokens at 0.75 words/token
 CHUNK_OVERLAP_WORDS: int = 37     # ~50 token overlap
 VECTOR_STORE_PATH: str = "data/vector_store"
-COLLECTION_NAME: str = "promptforge"
+COLLECTION_NAME: str = "synthforge"
 EMBEDDING_MODEL_NAME: str = "BAAI/bge-large-en-v1.5"
 BATCH_SIZE: int = 32
 MAX_RETRIES: int = 5
@@ -359,7 +359,7 @@ def main() -> None:
     """Run the full chunk-and-embed pipeline across all raw data directories."""
     os.makedirs("logs", exist_ok=True)
     logger.info("=" * 70)
-    logger.info("PromptForge chunk_and_embed.py — starting pipeline")
+    logger.info("SynthForge chunk_and_embed.py — starting pipeline")
 
     logger.info("Loading embedding model: %s", EMBEDDING_MODEL_NAME)
     try:

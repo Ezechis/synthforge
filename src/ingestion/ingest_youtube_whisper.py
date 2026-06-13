@@ -1,5 +1,5 @@
 """
-ingest_youtube_whisper.py — PromptForge / DeepForge Layer 1: YouTube Corpus
+ingest_youtube_whisper.py — SynthForge / DeepForge Layer 1: YouTube Corpus
 ============================================================================
 Channel-level ingestion strategy:
   1. Fetch full video list from each target channel (titles only, instant)

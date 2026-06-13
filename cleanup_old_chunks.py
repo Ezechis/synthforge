@@ -5,13 +5,13 @@ import chromadb
 from chromadb.config import Settings
 from pathlib import Path
 
-VECTOR_STORE_PATH = r"C:\Users\Ezeking\PromptForge\data\vector_store"
+VECTOR_STORE_PATH = r"C:\Users\Ezeking\SynthForge\data\vector_store"
 
 client = chromadb.PersistentClient(
     path=VECTOR_STORE_PATH,
     settings=Settings(anonymized_telemetry=False),
 )
-collection = client.get_collection("promptforge")
+collection = client.get_collection("synthforge")
 print(f"Before cleanup: {collection.count()} chunks")
 
 for source in ("arxiv", "reddit"):

@@ -1,5 +1,5 @@
 """
-PromptForge — Freshness Scheduler
+SynthForge — Freshness Scheduler
 ===================================
 Runs on your local Windows 11 machine in a dedicated CMD window.
 Keeps the live Space corpus current automatically.
@@ -16,11 +16,11 @@ Corpus update sequence (runs after every successful ingestion):
   5. HF Space restart
 
 Usage:
-  cd C:\\Users\\Ezeking\\PromptForge
+  cd C:\\Users\\Ezeking\\SynthForge
   C:\\Users\\Ezeking\\AppData\\Local\\Programs\\Python\\Python311\\python.exe src/scheduler/scheduler.py
 
 Keep the CMD window open. The process IS the scheduler — it blocks until Ctrl+C.
-Logs are written to: C:\\Users\\Ezeking\\PromptForge\\logs\\scheduler.log
+Logs are written to: C:\\Users\\Ezeking\\SynthForge\\logs\\scheduler.log
 
 Installation:
   pip install apscheduler
@@ -45,8 +45,8 @@ from apscheduler.triggers.cron import CronTrigger
 PYTHON_EXE: str = (
     r"C:\Users\Ezeking\AppData\Local\Programs\Python\Python311\python.exe"
 )
-PROJECT_ROOT: Path = Path(r"C:\Users\Ezeking\PromptForge")
-HF_SPACE_ID: str = "ezechinnabugwu/promptforge"
+PROJECT_ROOT: Path = Path(r"C:\Users\Ezeking\SynthForge")
+HF_SPACE_ID: str = "ezechinnabugwu/synthforge"
 
 # Ingestion scripts (relative to PROJECT_ROOT)
 SCRIPT_INGEST_ARXIV: str = "src/ingestion/ingest_arxiv.py"
@@ -334,7 +334,7 @@ def main() -> None:
     )
 
     logger.info("=" * 60)
-    logger.info("PromptForge Freshness Scheduler — STARTED")
+    logger.info("SynthForge Freshness Scheduler — STARTED")
     logger.info("  arXiv:  daily at %02d:%02d WAT", ARXIV_CRON_HOUR, ARXIV_CRON_MINUTE)
     logger.info(
         "  Reddit: every %s at %02d:%02d WAT",

@@ -75,7 +75,6 @@ def check_local_chromadb() -> None:
     section("1. LOCAL CHROMADB")
     try:
         import chromadb
-        import chromadb.__version__ as _cv  # type: ignore[import]
         version = getattr(chromadb, "__version__", "unknown")
         if version == EXPECTED_CHROMADB_VERSION:
             ok(f"ChromaDB version: {version}")

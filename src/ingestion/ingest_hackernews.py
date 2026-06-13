@@ -1,5 +1,5 @@
 """
-ingest_hackernews.py -- PromptForge Layer 1: Hacker News Data Source
+ingest_hackernews.py -- SynthForge Layer 1: Hacker News Data Source
 ====================================================================
 Fetches high-scoring HN stories and comments on prompt engineering
 and LLM topics via the Algolia HN Search API. No authentication needed.

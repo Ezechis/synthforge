@@ -1,9 +1,37 @@
-data/ 
-!data/evals/
-!data/evals/**
-logs/ 
-__pycache__/ 
-*.pyc 
-*.pkl 
-.env 
-audio_tmp/ 
+# --- Virtual environments ---
+venv/
+.venv/
+env/
+
+# --- Python build/cache artifacts ---
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# --- Local data stores (vectorstore lives in HF Dataset, not git) ---
+data/
+*.sqlite3
+*.parquet
+
+# --- Backups, temp, and tool artifacts ---
+*.bak
+*.redact_tmp
+*.tmp
+.aider*
+history_audit.txt
+
+# --- Local run outputs and progress files ---
+prompt_out.txt
+yt_progress*.json
+*.log
+logs/
+
+# --- Session/continuity documents (personal, not source) ---
+*.docx
+
+# --- Secrets and environment files (never commit) ---
+.env
+*.key
+*.pem
+*.pkl

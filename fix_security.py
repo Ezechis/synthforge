@@ -4,7 +4,7 @@ The backslash path C:\\Users\\... in the triple-quoted docstring causes Python
 to interpret \\U as a Unicode escape sequence, which crashes on import.
 Fix: replace Windows backslash paths in the docstring with forward slashes.
 
-Run from C:\\Users\\Ezeking\\PromptForge:
+Run from C:\\Users\\Ezeking\\SynthForge:
   python fix_security.py
 """
 from pathlib import Path

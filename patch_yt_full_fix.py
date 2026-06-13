@@ -5,7 +5,7 @@
 import sys
 from pathlib import Path
 
-TARGET = Path(r"C:\Users\Ezeking\PromptForge\src\ingestion\ingest_youtube.py")
+TARGET = Path(r"C:\Users\Ezeking\SynthForge\src\ingestion\ingest_youtube.py")
 
 content = TARGET.read_text(encoding="utf-8")
 

@@ -1,17 +1,17 @@
 """
-app.py — PromptForge Streamlit Frontend (Hugging Face Spaces Edition)
+app.py ï¿½ SynthForge Streamlit Frontend (Hugging Face Spaces Edition)
 =====================================================================
 Features:
   - Hybrid BM25 + dense retrieval with cross-encoder reranking
-  - File upload: PDF, Word, TXT, Markdown — supplements retrieval
+  - File upload: PDF, Word, TXT, Markdown ï¿½ supplements retrieval
   - Query suggestions, feedback, source confidence bar, copy button
   - Search history, live HN news, Griot Protocol articles panel
   - BM25 loaded from pre-built pickle for fast cold starts
 
 Environment variables required in HF Space secrets:
-    GROQ_API_KEY       — Groq API key
-    HF_TOKEN           — HF read token
-    HF_DATASET_REPO    — e.g. "ezechinnabugwu/promptforge-vectorstore"
+    GROQ_API_KEY       ï¿½ Groq API key
+    HF_TOKEN           ï¿½ HF read token
+    HF_DATASET_REPO    ï¿½ e.g. "ezechinnabugwu/synthforge-vectorstore"
 """
 
 import json
@@ -35,8 +35,8 @@ from sentence_transformers import CrossEncoder, SentenceTransformer
 # Configuration
 # ---------------------------------------------------------------------------
 
-COLLECTION_NAME: str = "promptforge"
-VECTOR_STORE_PATH: str = "/tmp/promptforge_vectorstore"
+COLLECTION_NAME: str = "synthforge"
+VECTOR_STORE_PATH: str = "/tmp/synthforge_vectorstore"
 EMBEDDING_MODEL_NAME: str = "BAAI/bge-large-en-v1.5"
 RERANKER_MODEL_NAME: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 GROQ_API_URL: str = "https://api.groq.com/openai/v1/chat/completions"
@@ -49,7 +49,7 @@ HN_ALGOLIA_URL: str = "https://hn.algolia.com/api/v1/search"
 FILE_CONTEXT_MAX_WORDS: int = 600
 
 # ---------------------------------------------------------------------------
-# The Griot Protocol — Series 1 by Ezechinyere Nnabugwu
+# The Griot Protocol ï¿½ Series 1 by Ezechinyere Nnabugwu
 # Set url="#" to show SOON badge. Replace with live URL when published.
 # ---------------------------------------------------------------------------
 
@@ -57,7 +57,7 @@ EZE_ARTICLES: list[dict] = [
     {
         "title": "Structural Prompt Architecture",
         "url": "#",
-        "description": "Markdown, XML tags, and JSON schema — mechanistic explanations of why each structure works.",
+        "description": "Markdown, XML tags, and JSON schema ï¿½ mechanistic explanations of why each structure works.",
     },
     {
         "title": "Four Eras of Prompt Engineering",
@@ -85,7 +85,7 @@ EXAMPLE_QUERIES: list[str] = [
     "What is chain-of-thought prompting?",
     "How does self-consistency decoding work?",
     "When does few-shot prompting fail?",
-    "ReAct vs Reflexion — what is the difference?",
+    "ReAct vs Reflexion ï¿½ what is the difference?",
     "How do I reduce hallucination in LLM outputs?",
     "What is DSPy and how does it differ from manual prompting?",
 ]
@@ -129,7 +129,7 @@ def download_vectorstore() -> None:
 # Resource loader
 # ---------------------------------------------------------------------------
 
-@st.cache_resource(show_spinner="Loading PromptForge knowledge base...")
+@st.cache_resource(show_spinner="Loading SynthForge knowledge base...")
 def load_all_resources():
     """Download and load all models and corpus. Cached for session lifetime."""
     download_vectorstore()
@@ -160,7 +160,7 @@ def load_all_resources():
             corpus_metas = cache["corpus_metas"]
             logger.info("BM25 cache loaded: %d chunks.", len(corpus_chunks))
         except Exception as exc:
-            logger.warning("BM25 cache failed (%s) — rebuilding...", exc)
+            logger.warning("BM25 cache failed (%s) ï¿½ rebuilding...", exc)
             all_docs = collection.get(include=["documents", "metadatas"])
             corpus_chunks, corpus_metas = all_docs["documents"], all_docs["metadatas"]
             bm25 = BM25Okapi([d.lower().split() for d in corpus_chunks])
@@ -198,7 +198,7 @@ def extract_file_content(uploaded_file) -> str:
                 reader = PdfReader(BytesIO(raw_bytes))
                 text = "\n\n".join(p.extract_text() or "" for p in reader.pages)
             except ImportError:
-                return "[PDF support unavailable — pypdf not installed on this Space]"
+                return "[PDF support unavailable ï¿½ pypdf not installed on this Space]"
 
         elif filename.endswith(".docx"):
             try:
@@ -206,7 +206,7 @@ def extract_file_content(uploaded_file) -> str:
                 doc = Document(BytesIO(raw_bytes))
                 text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
             except ImportError:
-                return "[Word support unavailable — python-docx not installed on this Space]"
+                return "[Word support unavailable ï¿½ python-docx not installed on this Space]"
 
         else:
             return ""

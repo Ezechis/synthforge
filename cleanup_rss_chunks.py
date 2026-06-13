@@ -5,7 +5,7 @@ client = chromadb.PersistentClient(
     path="data/vector_store",
     settings=Settings(anonymized_telemetry=False),
 )
-collection = client.get_collection("promptforge")
+collection = client.get_collection("synthforge")
 print(f"Before: {collection.count()} chunks")
 
 results = collection.get(where={"file": {"$eq": "rss_feeds.json"}})

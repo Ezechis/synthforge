@@ -1,5 +1,5 @@
 """
-ingest_rss_feeds.py -- PromptForge Layer 1: RSS/Atom Feed Aggregator
+ingest_rss_feeds.py -- SynthForge Layer 1: RSS/Atom Feed Aggregator
 ====================================================================
 Ingests AI research newsletters and company blog posts via RSS/Atom feeds.
 Covers Substack newsletters, researcher blogs, and company research blogs.
@@ -137,7 +137,7 @@ def fetch_full_content(url: str) -> str:
         resp = requests.get(
             url,
             timeout=REQUEST_TIMEOUT,
-            headers={"User-Agent": "PromptForge-Bot/1.0"},
+            headers={"User-Agent": "SynthForge-Bot/1.0"},
         )
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")

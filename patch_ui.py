@@ -1,11 +1,11 @@
 """
-patch_ui.py — PromptForge UI Redesign Patch
+patch_ui.py — SynthForge UI Redesign Patch
 ============================================
 Reads new_ui_section.py and splices it into hf_space/app.py,
 replacing everything from the UI anchor to end of file.
 Also patches generate_suggestions to produce 6 suggestions.
 
-Run from C:\\Users\\Ezeking\\PromptForge:
+Run from C:\\Users\\Ezeking\\SynthForge:
   python patch_ui.py
 
 Requires new_ui_section.py in the same directory as this script.
@@ -57,7 +57,7 @@ def main() -> None:
             print(f"ERROR: {name} not found at {path}")
             sys.exit(1)
 
-    print(f"\nPromptForge UI Redesign Patch")
+    print(f"\nSynthForge UI Redesign Patch")
     print(f"Target  : {APP_PATH}")
     print(f"New UI  : {NEW_UI_PATH}\n")
 

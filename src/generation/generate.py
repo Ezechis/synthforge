@@ -1,7 +1,7 @@
 """
-PromptForge - Generation and Answer Synthesis Layer
+SynthForge - Generation and Answer Synthesis Layer
 Layer 5: Takes retrieved chunks from Layer 4, constructs a structured
-prompt with the PromptForge system prompt, and generates a sourced,
+prompt with the SynthForge system prompt, and generates a sourced,
 synthesised answer via Ollama.
 
 Usage: py src/generation/generate.py
@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import requests
 
 from config.settings import GROQ_API_KEY, GROQ_MODEL, LOG_DIR
-from src.retrieval.hybrid_retrieval import PromptForgeRetriever
+from src.retrieval.hybrid_retrieval import SynthForgeRetriever
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
 LOG_DIR.mkdir(exist_ok=True)
@@ -33,8 +33,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── System Prompt ─────────────────────────────────────────────────────────────
-PROMPTFORGE_SYSTEM_PROMPT = """
-You are PromptForge — a precision synthesis engine built exclusively over a
+SYNTHFORGE_SYSTEM_PROMPT = """
+You are SynthForge — a precision synthesis engine built exclusively over a
 curated corpus of prompt engineering knowledge. You are not a general-purpose
 assistant. You reason only from the retrieved context provided to you. You
 never fabricate citations, never hallucinate sources, and never present
@@ -119,7 +119,7 @@ For complex multi-part questions:
 
 REFUSAL PROTOCOL
 When the retrieved corpus is genuinely insufficient to answer:
-- State this explicitly: "The current PromptForge corpus does not contain
+- State this explicitly: "The current SynthForge corpus does not contain
   sufficient evidence to answer this question reliably."
 - Describe what type of source would be needed to answer it.
 - Never hallucinate. A confident wrong answer is worse than an honest
@@ -177,7 +177,7 @@ def build_user_prompt(query: str, context: str) -> str:
     Returns:
         Complete user prompt string.
     """
-    return f"""RETRIEVED CONTEXT FROM PROMPTFORGE CORPUS:
+    return f"""RETRIEVED CONTEXT FROM SYNTHFORGE CORPUS:
 
 {context}
 
@@ -186,17 +186,17 @@ def build_user_prompt(query: str, context: str) -> str:
 USER QUERY: {query}
 
 Using only the retrieved context above, provide a comprehensive answer
-following the PromptForge answer structure contract defined in your
+following the SynthForge answer structure contract defined in your
 system prompt. Cite specific chunks by their source and reference.
 If the context is insufficient, invoke the refusal protocol."""
 
 
-def generate_answer(query: str, retriever: PromptForgeRetriever) -> str:
+def generate_answer(query: str, retriever: SynthForgeRetriever) -> str:
     """Full end-to-end pipeline: retrieve then generate via Groq API.
 
     Args:
         query: User query string.
-        retriever: Initialised PromptForgeRetriever instance.
+        retriever: Initialised SynthForgeRetriever instance.
 
     Returns:
         Generated answer string from Groq.
@@ -206,7 +206,7 @@ def generate_answer(query: str, retriever: PromptForgeRetriever) -> str:
 
     if not chunks:
         return (
-            "The PromptForge corpus returned no relevant results for this "
+            "The SynthForge corpus returned no relevant results for this "
             "query. This may indicate the topic is outside the current "
             "corpus scope."
         )
@@ -224,7 +224,7 @@ def generate_answer(query: str, retriever: PromptForgeRetriever) -> str:
         payload = {
             "model": GROQ_MODEL,
             "messages": [
-                {"role": "system", "content": PROMPTFORGE_SYSTEM_PROMPT},
+                {"role": "system", "content": SYNTHFORGE_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.1,
@@ -247,14 +247,14 @@ def generate_answer(query: str, retriever: PromptForgeRetriever) -> str:
         return f"Generation error: {exc}"
 
 
-def run_interactive_session(retriever: PromptForgeRetriever) -> None:
+def run_interactive_session(retriever: SynthForgeRetriever) -> None:
     """Run an interactive query session in the terminal.
 
     Args:
-        retriever: Initialised PromptForgeRetriever instance.
+        retriever: Initialised SynthForgeRetriever instance.
     """
     print("\n" + "=" * 70)
-    print("PROMPTFORGE — Prompt Engineering Knowledge Engine")
+    print("SYNTHFORGE — Prompt Engineering Knowledge Engine")
     print("Type your question. Type 'exit' to quit.")
     print("=" * 70 + "\n")
 
@@ -262,26 +262,26 @@ def run_interactive_session(retriever: PromptForgeRetriever) -> None:
         try:
             query = input("Query> ").strip()
         except (KeyboardInterrupt, EOFError):
-            print("\nExiting PromptForge.")
+            print("\nExiting SynthForge.")
             break
 
         if not query:
             continue
         if query.lower() == "exit":
-            print("Exiting PromptForge.")
+            print("Exiting SynthForge.")
             break
 
         print("\nRetrieving and synthesising...\n")
         answer = generate_answer(query, retriever)
 
         print("=" * 70)
-        print("PROMPTFORGE ANSWER")
+        print("SYNTHFORGE ANSWER")
         print("=" * 70)
         print(answer)
         print("=" * 70 + "\n")
 
 
 if __name__ == "__main__":
-    logger.info("Initialising PromptForge generation layer...")
-    retriever = PromptForgeRetriever()
+    logger.info("Initialising SynthForge generation layer...")
+    retriever = SynthForgeRetriever()
     run_interactive_session(retriever)

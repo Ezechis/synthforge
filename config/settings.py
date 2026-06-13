@@ -23,7 +23,7 @@ GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
 REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "")
 REDDIT_CLIENT_SECRET: str = os.getenv("REDDIT_CLIENT_SECRET", "")
 REDDIT_USER_AGENT: str = os.getenv("REDDIT_USER_AGENT", "SynthForge/0.1")
-GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "***REMOVED***")
+GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 
 #  GitHub Ingestion 
 

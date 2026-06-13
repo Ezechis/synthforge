@@ -1,6 +1,6 @@
 """
-PromptForge - Streamlit Frontend
-Layer 5 Interface: Web UI for querying the PromptForge knowledge engine.
+SynthForge - Streamlit Frontend
+Layer 5 Interface: Web UI for querying the SynthForge knowledge engine.
 Connects retrieval and generation layers into a clean user interface.
 
 Usage: streamlit run src/app.py
@@ -14,12 +14,12 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.retrieval.hybrid_retrieval import PromptForgeRetriever
-from src.generation.generate import generate_answer, PROMPTFORGE_SYSTEM_PROMPT
+from src.retrieval.hybrid_retrieval import SynthForgeRetriever
+from src.generation.generate import generate_answer, SYNTHFORGE_SYSTEM_PROMPT
 
 # ── Page Configuration ────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="PromptForge",
+    page_title="SynthForge",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -72,18 +72,18 @@ st.markdown("""
 
 # ── Retriever Initialisation (cached) ─────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
-def load_retriever() -> PromptForgeRetriever:
+def load_retriever() -> SynthForgeRetriever:
     """Load and cache the retriever across all sessions.
 
     Returns:
-        Initialised PromptForgeRetriever instance.
+        Initialised SynthForgeRetriever instance.
     """
-    with st.spinner("Initialising PromptForge knowledge engine..."):
-        return PromptForgeRetriever()
+    with st.spinner("Initialising SynthForge knowledge engine..."):
+        return SynthForgeRetriever()
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
-def render_sidebar(retriever: PromptForgeRetriever) -> dict:
+def render_sidebar(retriever: SynthForgeRetriever) -> dict:
     """Render sidebar with corpus stats and settings.
 
     Args:
@@ -93,7 +93,7 @@ def render_sidebar(retriever: PromptForgeRetriever) -> dict:
         Dict of user-selected settings.
     """
     with st.sidebar:
-        st.markdown("### ⚡ PromptForge")
+        st.markdown("### ⚡ SynthForge")
         st.markdown("*Prompt Engineering Knowledge Engine*")
         st.divider()
 
@@ -184,7 +184,7 @@ def main() -> None:
 
     # Header
     st.markdown(
-        '<p class="main-header">⚡ PromptForge</p>',
+        '<p class="main-header">⚡ SynthForge</p>',
         unsafe_allow_html=True
     )
     st.markdown(
@@ -266,7 +266,7 @@ def main() -> None:
             st.metric("Model", "llama-3.3-70b")
 
         # Display answer
-        st.markdown("### PromptForge Answer")
+        st.markdown("### SynthForge Answer")
         st.markdown(answer)
 
         # Display sources

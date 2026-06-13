@@ -1,0 +1,5 @@
+c=open(r'C:/Users/Ezeking/hf_space/app.py',encoding='utf-8').read()
+print('Judge function present:', 'def verify_answer_grounding(' in c)
+print('Judge hooked in pipeline:', 'verify_answer_grounding(query' in c)
+print('Auto-search in session state:', '_auto_search' in c)
+print('Search trigger updated:', 'search_clicked or _auto_search' in c)

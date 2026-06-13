@@ -2,7 +2,7 @@
 # UI
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title="PromptForge", page_icon="🔥", layout="wide",
+st.set_page_config(page_title="SynthForge", page_icon="🔥", layout="wide",
                    initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -48,7 +48,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Load resources
-with st.spinner("Initialising PromptForge..."):
+with st.spinner("Initialising SynthForge..."):
     collection, embed_model, reranker, bm25, corpus_chunks, corpus_metas = load_all_resources()
 
 # Session state
@@ -97,12 +97,12 @@ with st.sidebar:
             st.rerun()
 
     st.markdown("---")
-    st.caption("PromptForge · DeepForge Platform · by Ezechinyere Nnabugwu")
+    st.caption("SynthForge · DeepForge Platform · by Ezechinyere Nnabugwu")
 
 # =============================================================================
 # HEADER
 # =============================================================================
-st.markdown('<div class="main-header">🔥 PromptForge</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">🔥 SynthForge</div>', unsafe_allow_html=True)
 st.markdown(
     f'<div class="sub-header">Prompt Engineering Knowledge Synthesis Engine — '
     f'{collection.count():,} chunks across arXiv · GitHub · Reddit · Docs · YouTube</div>',

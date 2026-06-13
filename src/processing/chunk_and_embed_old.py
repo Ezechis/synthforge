@@ -1,5 +1,5 @@
 """
-PromptForge - Chunking and Embedding Pipeline
+SynthForge - Chunking and Embedding Pipeline
 Layer 2: Reads raw JSON from all sources, splits into 512-token chunks
 with 50-token overlap, preserves code blocks, tags metadata, embeds
 with bge-large-en-v1.5, and stores in ChromaDB.
@@ -325,7 +325,7 @@ def run_pipeline() -> None:
     VECTOR_STORE_DIR.mkdir(parents=True, exist_ok=True)
     client = chromadb.PersistentClient(path=str(VECTOR_STORE_DIR))
     collection = client.get_or_create_collection(
-        name="promptforge",
+        name="synthforge",
         metadata={"hnsw:space": "cosine"},
     )
 

@@ -1,5 +1,5 @@
 """
-PromptForge — GitHub Ingestion Script
+SynthForge — GitHub Ingestion Script
 Layer 1: Fetches top prompt engineering repositories and extracts
 READMEs, issues, and Jupyter notebooks into structured JSON.
 

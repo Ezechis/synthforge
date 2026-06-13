@@ -4,7 +4,7 @@
 import sys
 from pathlib import Path
 
-TARGET = Path(r"C:\Users\Ezeking\PromptForge\src\processing\chunk_and_embed.py")
+TARGET = Path(r"C:\Users\Ezeking\SynthForge\src\processing\chunk_and_embed.py")
 
 old = '        "author": str(metadata_source.get("author", metadata_source.get("authors", ""))),'
 new = (

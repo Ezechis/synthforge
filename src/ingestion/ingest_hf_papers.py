@@ -1,5 +1,5 @@
 """
-ingest_hf_papers.py — HuggingFace Daily Papers ingestion for PromptForge.
+ingest_hf_papers.py — HuggingFace Daily Papers ingestion for SynthForge.
 
 Replaces the broken ingest_paperswithcode.py.
 Source: https://huggingface.co/api/daily_papers
@@ -111,7 +111,7 @@ def _fetch_papers_for_date(date_str: str) -> list[dict[str, Any]]:
             HF_PAPERS_API_URL,
             params={"date": date_str},
             timeout=REQUEST_TIMEOUT_SECONDS,
-            headers={"User-Agent": "PromptForge/1.0 (research corpus builder)"},
+            headers={"User-Agent": "SynthForge/1.0 (research corpus builder)"},
         )
         if response.status_code == 404:
             logger.debug("No papers for %s (404)", date_str)
@@ -141,7 +141,7 @@ def _parse_paper(raw: dict[str, Any], fetch_date: str) -> dict[str, Any] | None:
         fetch_date: The date string this paper was fetched under.
 
     Returns:
-        Normalised dict ready for PromptForge corpus, or None if discarded.
+        Normalised dict ready for SynthForge corpus, or None if discarded.
     """
     paper_info: dict[str, Any] = raw.get("paper", raw)
 

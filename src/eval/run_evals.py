@@ -1,7 +1,7 @@
 """
 src/eval/run_evals.py
 ======================
-Automated regression testing for PromptForge.
+Automated regression testing for SynthForge.
 Runs every query in the golden eval set through retrieval + generation,
 checks expected components, and writes a quality report.
 
@@ -14,7 +14,7 @@ Usage:
 Environment variables:
     GROQ_API_KEY       -- generation model
     HF_TOKEN           -- for uploading results
-    HF_DATASET_REPO    -- e.g. ezechinnabugwu/promptforge-vectorstore
+    HF_DATASET_REPO    -- e.g. ezechinnabugwu/synthforge-vectorstore
     EVAL_SAMPLE_SIZE   -- how many queries to run (default: 20, full=60)
     VECTOR_STORE_PATH  -- local ChromaDB path (default: data/vector_store)
 
@@ -51,12 +51,12 @@ GROQ_API_URL: str   = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL: str     = "llama-3.1-8b-instant"  # Higher RPM on Groq free tier for eval runs
 EMBED_MODEL_NAME: str = "BAAI/bge-large-en-v1.5"
 RERANKER_MODEL_NAME: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-COLLECTION_NAME: str = "promptforge"
+COLLECTION_NAME: str = "synthforge"
 MIN_RETRIEVAL_SCORE: float = -6.5
 EVAL_SAMPLE_SIZE: int = int(os.environ.get("EVAL_SAMPLE_SIZE", "20"))
 HF_TOKEN: str = os.environ.get("HF_TOKEN", "")
 HF_DATASET_REPO: str = os.environ.get(
-    "HF_DATASET_REPO", "ezechinnabugwu/promptforge-vectorstore"
+    "HF_DATASET_REPO", "ezechinnabugwu/synthforge-vectorstore"
 )
 
 
@@ -188,7 +188,7 @@ def generate(query: str, chunks: list[dict]) -> str:
                     "model": GROQ_MODEL,
                     "messages": [
                         {"role": "system", "content":
-                         "You are PromptForge. Answer only from retrieved context. "
+                         "You are SynthForge. Answer only from retrieved context. "
                          "Always cite original authors (e.g. Wei et al, Wang et al) when discussing research techniques. Include key technical terms. Aim for 150-250 words."},
                         {"role": "user", "content": user_msg},
                     ],

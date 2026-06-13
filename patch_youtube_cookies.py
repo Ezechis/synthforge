@@ -3,7 +3,7 @@
 import sys
 from pathlib import Path
 
-TARGET = Path(r"C:\Users\Ezeking\PromptForge\src\ingestion\ingest_youtube.py")
+TARGET = Path(r"C:\Users\Ezeking\SynthForge\src\ingestion\ingest_youtube.py")
 
 old = '        yta = YouTubeTranscriptApi()\n        fetched = yta.fetch(video_id, languages=["en", "en-US", "en-GB"])'
 new = '        yta = YouTubeTranscriptApi(cookies="cookies.txt")\n        fetched = yta.fetch(video_id, languages=["en", "en-US", "en-GB"])'

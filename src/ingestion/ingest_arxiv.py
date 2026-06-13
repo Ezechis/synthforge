@@ -1,5 +1,5 @@
 """
-PromptForge - arXiv Ingestion Script
+SynthForge - arXiv Ingestion Script
 Layer 1: Fetches foundational prompt engineering papers,
 extracts metadata and PDF text into structured JSON.
 

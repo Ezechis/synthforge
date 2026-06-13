@@ -69,7 +69,7 @@ def hybrid_retrieve(
 # Generation
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are PromptForge — a synthesis engine over a curated corpus of prompt engineering knowledge spanning arXiv research papers, GitHub repositories, Reddit practitioner discussions, official documentation, and YouTube transcripts.
+SYSTEM_PROMPT = """You are SynthForge — a synthesis engine over a curated corpus of prompt engineering knowledge spanning arXiv research papers, GitHub repositories, Reddit practitioner discussions, official documentation, and YouTube transcripts.
 
 CORE DIRECTIVE: Reason only from retrieved context. Never fabricate citations. State explicitly if the corpus is insufficient.
 
@@ -223,7 +223,7 @@ def compute_source_confidence(results: list[dict]) -> dict:
 # UI
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title="PromptForge", page_icon="🔥", layout="wide",
+st.set_page_config(page_title="SynthForge", page_icon="🔥", layout="wide",
                    initial_sidebar_state="expanded")
 
 st.markdown("""

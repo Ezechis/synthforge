@@ -1,5 +1,5 @@
 """
-ingest_stackoverflow.py -- PromptForge Layer 1: Stack Overflow Data Source
+ingest_stackoverflow.py -- SynthForge Layer 1: Stack Overflow Data Source
 ==========================================================================
 Fetches high-voted questions and accepted answers on prompt engineering
 and LLM topics via the Stack Exchange API. No API key required (300 req/day).

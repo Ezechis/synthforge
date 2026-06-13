@@ -1,4 +1,4 @@
-# Batch A patcher for PromptForge hf_space app.py
+# Batch A patcher for SynthForge hf_space app.py
 # Fixes: source_type->source, add author, lift 80-word cap, fix counters
 
 import sys

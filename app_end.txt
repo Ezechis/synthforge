@@ -8,7 +8,7 @@ tier1": c["primary"], "tier1_pct": round(c["primary"] / n * 100),
 # UI
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title="PromptForge", page_icon="🔥", layout="wide",
+st.set_page_config(page_title="SynthForge", page_icon="🔥", layout="wide",
                    initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -48,7 +48,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-with st.spinner("Initialising PromptForge..."):
+with st.spinner("Initialising SynthForge..."):
     collection, embed_model, reranker, bm25, corpus_chunks, corpus_metas = load_all_resources()
 
 for key, default in [
@@ -112,10 +112,10 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
     st.markdown("---")
-    st.caption("PromptForge · ForgeAI Platform · by Ezechinyere Nnabugwu")
+    st.caption("SynthForge · ForgeAI Platform · by Ezechinyere Nnabugwu")
 
 # ── Main ─────────────────────────────────────────────────────────────────────
-st.markdown('<div class="main-header">🔥 PromptForge</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">🔥 SynthForge</div>', unsafe_allow_html=True)
 st.markdown(
     f'<div class="sub-header">Prompt Engineering Knowledge Synthesis Engine — '
     f'{collection.count():,} chunks across arXiv · GitHub · Reddit · Docs · YouTube</div>',
@@ -134,7 +134,7 @@ uploaded_file = st.file_uploader(
     "📎 Attach a document (optional) — PDF, Word, TXT, or Markdown:",
     type=["pdf", "docx", "txt", "md"],
     help="Uploaded content supplements the knowledge base. "
-         "PromptForge analyses your document alongside retrieved chunks.",
+         "SynthForge analyses your document alongside retrieved chunks.",
 )
 
 c1, c2, _ = st.columns([1, 1, 6])

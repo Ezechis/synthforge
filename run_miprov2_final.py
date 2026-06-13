@@ -22,7 +22,7 @@ import argparse
 import datetime
 
 # ── Step 1: Set in os.environ FIRST before any imports ───────────────────────
-GROQ_KEY = "***REMOVED***"
+GROQ_KEY = ""
 os.environ["GROQ_API_KEY"] = GROQ_KEY
 os.environ["GROQ_API_KEY_HEADER"] = f"Bearer {GROQ_KEY}"
 

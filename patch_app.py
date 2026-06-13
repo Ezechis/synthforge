@@ -1,5 +1,5 @@
 """
-patch_app.py — PromptForge Session 9 Security Patch
+patch_app.py — SynthForge Session 9 Security Patch
 =====================================================
 Makes exactly four edits to hf_space/app.py:
   1. Adds security import line
@@ -7,7 +7,7 @@ Makes exactly four edits to hf_space/app.py:
   3. Adds prompt injection + rate limit gates in search handler
   4. Renames ForgeAI → DeepForge in sidebar caption
 
-Run from C:\\Users\\Ezeking\\PromptForge:
+Run from C:\\Users\\Ezeking\\SynthForge:
   C:\\Users\\Ezeking\\AppData\\Local\\Programs\\Python\\Python311\\python.exe patch_app.py
 
 Creates app.py.bak before touching anything.
@@ -81,13 +81,13 @@ IMPORT_REPLACE = (
 # --- Edit 2: File upload validation gate ---
 # Anchor: the closing paren of st.file_uploader() → blank line → st.columns line
 UPLOAD_FIND = (
-    '"PromptForge analyses your document alongside retrieved chunks.",\n'
+    '"SynthForge analyses your document alongside retrieved chunks.",\n'
     ')\n'
     '\n'
     'c1, c2, _ = st.columns([1, 1, 6])'
 )
 UPLOAD_REPLACE = (
-    '"PromptForge analyses your document alongside retrieved chunks.",\n'
+    '"SynthForge analyses your document alongside retrieved chunks.",\n'
     ')\n'
     '\n'
     'if uploaded_file is not None:\n'
@@ -123,8 +123,8 @@ SEARCH_REPLACE = (
 )
 
 # --- Edit 4: Branding ---
-BRAND_FIND    = "PromptForge \u00b7 ForgeAI Platform \u00b7 by Ezechinyere Nnabugwu"
-BRAND_REPLACE = "PromptForge \u00b7 DeepForge Platform \u00b7 by Ezechinyere Nnabugwu"
+BRAND_FIND    = "SynthForge \u00b7 ForgeAI Platform \u00b7 by Ezechinyere Nnabugwu"
+BRAND_REPLACE = "SynthForge \u00b7 DeepForge Platform \u00b7 by Ezechinyere Nnabugwu"
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +138,7 @@ def main() -> None:
         print(f"ERROR: app.py not found at {APP_PATH}")
         sys.exit(1)
 
-    print(f"\nPromptForge Session 9 — Security Patch")
+    print(f"\nSynthForge Session 9 — Security Patch")
     print(f"Target : {APP_PATH}")
 
     content: str = APP_PATH.read_text(encoding="utf-8")

@@ -1,5 +1,5 @@
 """
-ingest_paperswithcode.py -- PromptForge Layer 1: Papers With Code
+ingest_paperswithcode.py -- SynthForge Layer 1: Papers With Code
 =================================================================
 Fetches top prompt engineering papers with benchmark results and
 GitHub implementation links via the Papers With Code API.

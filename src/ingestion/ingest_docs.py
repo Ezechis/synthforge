@@ -1,5 +1,5 @@
 """
-PromptForge - Official Documentation Ingestion
+SynthForge - Official Documentation Ingestion
 Layer 1: Scrapes LangChain, Anthropic, OpenAI Cookbook, DSPy,
 Gemini, Mistral, and Hugging Face documentation.
 No credentials required - all publicly accessible.
@@ -38,7 +38,7 @@ OUTPUT_DIR: Path = DATA_RAW / "docs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 HEADERS: dict[str, str] = {
-    "User-Agent": "PromptForge/0.1 research tool (read-only)",
+    "User-Agent": "SynthForge/0.1 research tool (read-only)",
 }
 
 RATE_LIMIT_PAUSE: float = 2.0

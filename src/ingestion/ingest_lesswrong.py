@@ -1,5 +1,5 @@
 """
-ingest_lesswrong.py -- PromptForge Layer 1: LessWrong Data Source
+ingest_lesswrong.py -- SynthForge Layer 1: LessWrong Data Source
 =================================================================
 Fetches high-karma LessWrong posts on AI/ML/prompt engineering topics
 via the public GraphQL API. No authentication required.
