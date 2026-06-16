@@ -22,7 +22,7 @@ import argparse
 import datetime
 
 # ── Step 1: Set in os.environ FIRST before any imports ───────────────────────
-GROQ_KEY = ""
+GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
 os.environ["GROQ_API_KEY"] = GROQ_KEY
 os.environ["GROQ_API_KEY_HEADER"] = f"Bearer {GROQ_KEY}"
 
@@ -104,7 +104,7 @@ OUTPUT_DIR = Path("data/optimization")
 DEFAULT_TRAIN_SIZE = 100
 DEFAULT_DEV_SIZE = 50
 DEFAULT_MAX_STEPS = 10
-TOP_K_CHUNKS = 8
+TOP_K_CHUNKS = 3
 RANDOM_SEED = 42
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -202,7 +202,7 @@ def build_dspy_examples(records: list[dict]) -> list[dspy.Example]:
             context=context,
             expected_components=record.get("expected_components", []),
             difficulty=record.get("difficulty", "intermediate"),
-        )
+        ).with_inputs("query", "context")
         if (idx + 1) % 10 == 0:
             log.info("Built %d DSPy examples.", idx + 1)
         examples.append(example)
@@ -271,8 +271,8 @@ optimized_program = teleprompter.compile(
     student=program,
     trainset=trainset,
     num_trials=max_steps,
-    max_bootstrapped_demos=3,
-    max_labeled_demos=4,
+    max_bootstrapped_demos=1,
+    max_labeled_demos=2,
     minibatch=False,
 )
 
@@ -299,4 +299,6 @@ backup_path.write_text(full_output, encoding="utf-8")
 log.info("\n%s\nOPTIMIZED INSTRUCTION:\n%s\n%s",
          "=" * 60, optimized_instruction, "=" * 60)
 log.info("Saved to %s", latest_path)
+optimized_program.save(str(OUTPUT_DIR / "optimized_program.json"))
+log.info("Full DSPy program saved to optimized_program.json")
 print("\nMIPROv2 COMPLETE. Optimized prompt saved. Please run 'python verify_all_pipelines.py' to verify the pipelines.")
