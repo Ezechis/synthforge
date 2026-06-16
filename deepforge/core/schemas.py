@@ -69,8 +69,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # Module metadata & named constants                                           #
 # --------------------------------------------------------------------------- #
 
-SCHEMA_VERSION: str = "0.1.0"
-"""Bump on any breaking change to a stored shape; used to gate migrations."""
+SCHEMA_VERSION: str = "0.2.0"
+"""Bump on any breaking change to a stored shape; used to gate migrations.
+
+0.2.0 -- additive: optional bibliographic fields on ``SynthForgeMeta`` (isbn,
+publisher, edition, doi, page_start, chapter). Backward compatible; 0.1.0
+records reconstruct unchanged (absent ``meta_*`` keys default to ``None``)."""
 
 # Chunking defaults -- sentence-aware splitting target (project spec: 512/50).
 DEFAULT_CHUNK_SIZE_TOKENS: int = 512
@@ -421,6 +425,16 @@ class SynthForgeMeta(BaseDomainMeta):
     target_model_family: Optional[str] = None
     task_category: Optional[str] = None
 
+    # Bibliographic citation (schema 0.2.0). Optional and additive: populated for
+    # book/paper/doc sources, ``None`` elsewhere. Flatten/reconstruct is generic
+    # (iterates model fields / ``meta_*`` keys), so these round-trip automatically.
+    isbn: Optional[str] = None
+    publisher: Optional[str] = None
+    edition: Optional[str] = None
+    doi: Optional[str] = None
+    page_start: Optional[int] = None
+    chapter: Optional[str] = None
+
 
 # --------------------------------------------------------------------------- #
 # Internal helpers                                                             #
@@ -769,6 +783,53 @@ def _self_test() -> None:
         "chain_of_thought",
         "few_shot",
     ]
+
+    # Bibliographic fields (schema 0.2.0) survive the chroma round-trip, and
+    # populated-vs-omitted optionals reconstruct correctly.
+    book = RawDocument.create(
+        source_type=SourceType.BOOK,
+        content_type=ContentType.BOOK_EXCERPT,
+        source_url="https://example.org/books/prompting-handbook#p42",
+        raw_content="A worked example of few-shot prompting from the handbook.",
+        license=License.CC_BY_SA,
+        credibility_tier=CredibilityTier.TIER_2_IMPLEMENTATION,
+        domain=ForgeDomain.PROMPT_ENGINEERING,
+        title="The Prompting Handbook",
+        author="A. Author",
+    )
+    book_chunk = Chunk.from_document(
+        book,
+        text="Few-shot exemplars should be representative of the target task.",
+        chunk_index=41,
+        token_count=11,
+        domain_metadata=SynthForgeMeta(
+            technique_tags=["few_shot"],
+            isbn="978-1-23456-789-0",
+            publisher="DeepForge Press",
+            edition="2nd",
+            page_start=42,
+            chapter="3",
+            # doi intentionally left None -> must be omitted from chroma, then
+            # reconstruct back to None.
+        ),
+        embedding_model="bge-large-en-v1.5",
+    )
+    book_metadata = book_chunk.to_chroma_metadata()
+    assert "meta_doi" not in book_metadata, "None optional must be omitted from chroma."
+    assert book_metadata["meta_isbn"] == "978-1-23456-789-0"
+    assert book_metadata["meta_page_start"] == 42  # int preserved, not stringified
+    restored_book = Chunk.from_chroma_metadata(
+        chunk_id=book_chunk.chunk_id, text=book_chunk.text, metadata=book_metadata
+    )
+    assert restored_book == book_chunk, "Bibliographic round-trip mismatch."
+    bib = restored_book.domain_metadata
+    assert isinstance(bib, SynthForgeMeta)
+    assert bib.isbn == "978-1-23456-789-0"
+    assert bib.publisher == "DeepForge Press"
+    assert bib.edition == "2nd"
+    assert bib.page_start == 42 and isinstance(bib.page_start, int)
+    assert bib.chapter == "3"
+    assert bib.doi is None, "Omitted optional must reconstruct as None."
 
     # License gate must reject non-commercial content (fail closed).
     rejected = False
