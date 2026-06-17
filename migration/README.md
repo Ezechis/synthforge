@@ -25,6 +25,9 @@ working as designed.
 | `check_prereqs.py` | 2 | no | Cardinality / license / range / tokenizer checks. |
 | `mapping.py` | 3–5 | no | Legacy record → canonical `Chunk` (via `RawDocument.create`/`Chunk.from_document`). |
 | `dry_run.py` | 3 | no | Validate every record by full chroma round-trip; emit UPDATE/DROP/dedup + `reports/dry_run_plan.json`. |
+| `phase4_apply.py` | 4 | **fresh store only** | Reuse legacy vectors (from a copy) + upsert migrated chunks into `data/vector_store_clean`. Resume-safe. |
+| `build_bm25.py` | 5 | fresh store only | Rebuild the BM25 cache for the 2,247-record corpus (bundled with the clean store). |
+| `phase5_validate.py` | 5 | no | Count/round-trip/vector/id-set reconciliation + BM25 & dense retrieval spot-checks. |
 
 ## chunk_index derivation
 Cohort B has no explicit index. Within each `source_id` group, records are
@@ -34,5 +37,12 @@ upsert; distinct chunks get distinct indices. (`source_id`↔`source_url` is 1:1
 so this is consistent with `document_id = sha256(source_url)`.)
 
 ## Status
-Phases 1–3 complete; **stopped at the dry-run human checkpoint.** Phase 4
-(apply to a fresh store) and Phase 6 (HF cutover) await explicit approval.
+Phases 1–5 complete (dry run approved). The clean store lives at
+`data/vector_store_clean/` (2,247 chunks + `bm25_cache.pkl`); the legacy store
+and the HF dataset are untouched. **Stopped before the Phase-6 cutover** — the
+only step that writes to production — which awaits explicit human approval.
+
+Validation (Phase 5): count 2,247; all reconstruct via `from_chroma_metadata`;
+all vectors dim 1024 & L2-normalised; id-set matches the plan; reconciliation
+2247 − 0 drop − 0 collapse = 2247. The legacy/clean source-copy working dir
+`data/vector_store_src_copy/` can be deleted after cutover.
