@@ -28,6 +28,7 @@ working as designed.
 | `phase4_apply.py` | 4 | **fresh store only** | Reuse legacy vectors (from a copy) + upsert migrated chunks into `data/vector_store_clean`. Resume-safe. |
 | `build_bm25.py` | 5 | fresh store only | Rebuild the BM25 cache for the 2,247-record corpus (bundled with the clean store). |
 | `phase5_validate.py` | 5 | no | Count/round-trip/vector/id-set reconciliation + BM25 & dense retrieval spot-checks. |
+| `phase6_cutover.py` | 6 | **production (human-run)** | Prepared cutover: offline dry-run by default; `--confirm-push` (with `HF_TOKEN`) snapshots rollback then pushes the clean store + BM25. The assistant does NOT run this. |
 
 ## chunk_index derivation
 Cohort B has no explicit index. Within each `source_id` group, records are
@@ -46,3 +47,12 @@ Validation (Phase 5): count 2,247; all reconstruct via `from_chroma_metadata`;
 all vectors dim 1024 & L2-normalised; id-set matches the plan; reconciliation
 2247 − 0 drop − 0 collapse = 2247. The legacy/clean source-copy working dir
 `data/vector_store_src_copy/` can be deleted after cutover.
+
+Phase 6 (`phase6_cutover.py`) is **prepared but not executed** — it pushes to
+the live HF dataset `ezechinnabugwu/synthforge-vectorstore` and is the human's
+to run. Offline dry-run: `py -m migration.phase6_cutover`. Real cutover (human):
+set `HF_TOKEN` (the `synthforge-write-june2026` write token) and add
+`--confirm-push`. It snapshots the current production state to
+`migration/rollback/<ts>/` first, uploads orphan-safely (deletes the old
+segment, keeps `bm25_cache.pkl` at repo root), verifies, then restarts the Space
+(`--restart-space --space-id …`) or leaves that manual.
