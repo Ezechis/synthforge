@@ -1,0 +1,122 @@
+# .github/workflows/eval_live_baseline.yml
+# SynthForge — Live Baseline (judge-scored, per-cluster)
+# ======================================================
+# Manual (workflow_dispatch) baseline against the LIVE corpus.
+#   retrieve  ->  generate (Groq llama-3.3-70b-versatile, via public entrypoint)
+#             ->  judge   (Groq llama-3.1-8b-instant, 1-10 vs rubric)
+# Golden eval set is pulled at runtime from a PRIVATE HF dataset and is NEVER
+# committed to the repo. The live vectorstore is READ-ONLY here.
+#
+# Token budget: default is a stratified ~300-record sample (every cluster
+# represented). For the FULL run, set mode=full and schedule OFF-PEAK, after the
+# 01:00 WAT Groq quota reset.
+#
+# Required repo secrets:
+#   GROQ_API_KEY   — generation + judge
+#   HF_TOKEN       — pull private golden dataset AND the vectorstore dataset
+#   HF_DATASET_REPO— (optional) vectorstore repo; defaults to ezechinnabugwu/synthforge-vectorstore
+# Optional repo variables:
+#   GOLDEN_DATASET_REPO / GOLDEN_DATASET_FILE — override golden source
+
+name: Live Baseline Eval
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "sample (stratified ~N) or full (budget-capped large draw, run off-peak)"
+        required: false
+        default: "sample"
+        type: choice
+        options: ["sample", "full"]
+      sample_size:
+        description: "Target total records for the stratified sample"
+        required: false
+        default: "300"
+      seed:
+        description: "RNG seed for reproducible sampling"
+        required: false
+        default: "42"
+
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  VECTOR_STORE_PATH: data/vector_store
+
+jobs:
+  live-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300   # full off-peak runs are long (70b generate + judge per query)
+
+    steps:
+      - name: Checkout repository (dispatched branch)
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements_actions.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Cache embedding + reranker model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: ${{ runner.os }}-hf-bge-large-reranker-large-v1
+
+      - name: Install dependencies (chromadb pinned 1.5.8 via requirements_actions.txt)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_actions.txt
+          # config.settings imports python-dotenv transitively; not in the shared
+          # requirements file, so install it explicitly here.
+          pip install python-dotenv
+
+      - name: Verify ChromaDB pin (1.5.8 is load-bearing)
+        run: |
+          python -c "import chromadb; assert chromadb.__version__=='1.5.8', chromadb.__version__; print('chromadb', chromadb.__version__)"
+
+      - name: Create runtime directories
+        run: mkdir -p logs data/raw data/evals/_remote data/evals/results
+
+      - name: Download LIVE vectorstore (read-only) from HF Dataset
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+        run: python deploy/download_vectorstore.py
+
+      - name: Run live baseline (retrieve -> generate 70b -> judge 8b)
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+          GOLDEN_DATASET_REPO: ${{ vars.GOLDEN_DATASET_REPO || 'ezechinnabugwu/synthforge-golden-evals' }}
+          GOLDEN_DATASET_FILE: ${{ vars.GOLDEN_DATASET_FILE || 'synthforge_corpus_500k.jsonl' }}
+          EVAL_MODE: ${{ github.event.inputs.mode }}
+          EVAL_SAMPLE_SIZE: ${{ github.event.inputs.sample_size }}
+          EVAL_SEED: ${{ github.event.inputs.seed }}
+        run: python src/eval/run_live_baseline.py
+
+      - name: Print summary to log
+        if: always()
+        run: |
+          if [ -f data/evals/results/latest_live_baseline.md ]; then
+            echo "=== LIVE BASELINE SUMMARY ==="
+            cat data/evals/results/latest_live_baseline.md
+          else
+            echo "No summary produced (run likely aborted on a sanity guard — check logs above)."
+          fi
+
+      - name: Upload scored report (CSV + JSON + Markdown)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-baseline-report
+          path: data/evals/results/
+          if-no-files-found: warn
+          retention-days: 30

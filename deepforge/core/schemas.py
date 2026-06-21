@@ -1,581 +1,867 @@
-"""
-deepforge/core/schemas.py — DeepForge Base Schema (Rosetta Stone Architecture)
+"""DEEPCORE BaseSchema -- Layers 0-2 (primitives, ingestion, processing).
 
-Universal metadata standard for ALL DeepForge corpora.
-Every Knowledge Object across all 24 Forges inherits this base schema
-plus optional Forge-specific extension profiles.
+This module is the domain-agnostic data contract shared by every Forge on the
+DeepForge platform (SynthForge, CodeForge, MathForge, ...). It defines the
+"skeleton" that DEEPCORE moves through its retrieval-augmented-generation
+pipeline, while leaving each Forge free to attach strictly-typed,
+domain-specific metadata via a registry of ``BaseDomainMeta`` subclasses.
 
-This is the foundational file that makes cross-Forge synthesis possible.
-All ingestion scripts must produce chunks conforming to this schema.
+Scope of this file (Layers 0-2):
+    L0  Primitives   shared enumerations (source, content, credibility,
+                     license, domain) that tag every object.
+    L1  Ingestion    ``RawDocument`` -- the validated output of any ingestor.
+    L2  Processing   ``Chunk`` -- the workhorse stored in / retrieved from the
+                     shared ChromaDB collection, carrying typed
+                     ``domain_metadata``, a deterministic SHA-256 id, and
+                     ChromaDB-safe (de)serialisation.
+
+Layers 3-5 (retrieval ``ScoredChunk``, generation ``SynthesizedAnswer``,
+operations ``IngestionRun``) are intentionally deferred. They compose over the
+objects defined here -- ``ScoredChunk`` is expected to wrap a ``Chunk`` and
+hold scores itself; ``Citation`` references a ``Chunk`` by id -- so they will
+not require edits to this file when they land.
 
 Design decisions (settled):
-- Dataclasses over TypedDict for IDE support and validation
-- Optional fields default to None — never fail on missing data
-- Forge-specific extensions added as separate dataclasses
-- SHA-256 chunk_id as primary key across all Forges
-- evidence_strength and confidence_label drive retrieval weighting
+    * Closed base, open extension. Adding Forge #N never edits ``Chunk``; it
+      registers a ``BaseDomainMeta`` subclass via ``@register_domain_meta``.
+    * Per-Forge metadata is strongly typed and validated, not a loose dict. The
+      ``DomainMetaRegistry`` keeps ``Chunk`` a single homogeneous type, so a
+      mixed-domain ``list[Chunk]`` (cross-domain retrieval) just works.
+    * Permissive now, tighten later. Domain metadata fields start optional and
+      ``extra='allow'`` while each domain settles; tighten an individual
+      subclass to ``extra='forbid'`` once its shape stabilises.
+    * Fail closed on licensing. A non-commercial, proprietary, or unknown
+      license raises ``LicenseViolationError`` at construction -- DeepForge
+      charges users, so such content must never enter the corpus.
+    * Resume-safe ids. Chunk ids are a deterministic SHA-256 over
+      (document_id, chunk_index, text), so re-ingestion after a power loss is
+      idempotent.
+
+Requires Pydantic v2.
 """
 
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
+import types
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Any, ClassVar, Optional, Union, get_args, get_origin
+
+try:
+    import pydantic
+except ImportError as exc:  # pragma: no cover - environment guard
+    raise ImportError(
+        "DEEPCORE schemas require the 'pydantic' package (v2). "
+        "Install it with: pip install 'pydantic>=2'"
+    ) from exc
+
+if int(pydantic.VERSION.split(".", 1)[0]) < 2:  # pragma: no cover
+    raise ImportError(
+        f"DEEPCORE schemas require Pydantic v2, found {pydantic.VERSION}. "
+        "Pin a v2 release compatible with your installed DSPy version."
+    )
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-# ── Enumerations ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------- #
+# Module metadata & named constants                                           #
+# --------------------------------------------------------------------------- #
 
-class EvidenceStrength(str, Enum):
-    """How strongly is this claim supported by evidence?"""
-    STRONG = "Strong"
-    MODERATE = "Moderate"
-    WEAK = "Weak"
-    ANECDOTAL = "Anecdotal"
-    SPECULATIVE = "Speculative"
+SCHEMA_VERSION: str = "0.2.0"
+"""Bump on any breaking change to a stored shape; used to gate migrations.
 
+0.2.0 -- additive: optional bibliographic fields on ``SynthForgeMeta`` (isbn,
+publisher, edition, doi, page_start, chapter). Backward compatible; 0.1.0
+records reconstruct unchanged (absent ``meta_*`` keys default to ``None``)."""
 
-class ReproducibilityStatus(str, Enum):
-    """Has this finding been independently reproduced?"""
-    INDEPENDENTLY_REPRODUCED = "Independently Reproduced"
-    PARTIALLY_REPRODUCED = "Partially Reproduced"
-    NOT_REPRODUCED = "Not Reproduced"
-    CONTRADICTED = "Contradicted"
-    UNKNOWN = "Unknown"
+# Chunking defaults -- sentence-aware splitting target (project spec: 512/50).
+DEFAULT_CHUNK_SIZE_TOKENS: int = 512
+DEFAULT_CHUNK_OVERLAP_TOKENS: int = 50
 
+# Deterministic id hashing.
+_HASH_ALGORITHM: str = "sha256"
+_HASH_ENCODING: str = "utf-8"
 
-class ContradictionStatus(str, Enum):
-    """Does this claim conflict with other sources?"""
-    CONSISTENT = "Consistent"
-    DEBATED = "Debated"
-    CONTRADICTED = "Contradicted"
-    UNRESOLVED = "Unresolved"
+# ChromaDB metadata values must be str | int | float | bool (no lists/nesting).
+# List-valued fields are flattened to a single delimited string for storage.
+CHROMA_LIST_DELIMITER: str = " | "
+# Domain-specific metadata is stored under this key prefix so it can be
+# round-tripped back into the correct ``BaseDomainMeta`` subclass.
+CHROMA_META_PREFIX: str = "meta_"
 
-
-class ConfidenceLabel(str, Enum):
-    """Human-readable confidence label shown in SynthForge answers."""
-    WELL_ESTABLISHED = "[WELL-ESTABLISHED]"
-    PRODUCTION_PROVEN = "[PRODUCTION-PROVEN]"
-    EMERGING = "[EMERGING]"
-    LIMITED_EVIDENCE = "[LIMITED EVIDENCE]"
-    SPECULATIVE = "[SPECULATIVE]"
-    DEPRECATED = "[DEPRECATED]"
-    CORPUS_GAP = "[CORPUS GAP]"
+# Quality scoring (e.g. the Reddit 4-gate filter): chunks below the retained
+# threshold are discarded upstream; the field is kept here for provenance.
+MIN_RETAINED_QUALITY_SCORE: int = 3
+MAX_QUALITY_SCORE: int = 5
 
 
-class KnowledgeHalfLife(str, Enum):
-    """How quickly does this knowledge become stale?"""
-    SHORT = "SHORT"    # < 6 months (e.g. specific model benchmarks)
-    MEDIUM = "MEDIUM"  # 1-2 years (e.g. best practices)
-    LONG = "LONG"      # 5+ years (e.g. foundational theory)
+__all__ = [
+    "SCHEMA_VERSION",
+    "SchemaError",
+    "LicenseViolationError",
+    "ChromaMetadataError",
+    "UnknownForgeDomainError",
+    "ChunkIntegrityError",
+    "SourceType",
+    "ContentType",
+    "CredibilityTier",
+    "License",
+    "UncertaintyLevel",
+    "ForgeDomain",
+    "COMMERCIAL_USE_PROHIBITED_LICENSES",
+    "RawDocument",
+    "BaseDomainMeta",
+    "DomainMetaRegistry",
+    "register_domain_meta",
+    "SynthForgeMeta",
+    "Chunk",
+]
 
 
-class KnowledgeEra(str, Enum):
-    """Which era of AI development does this knowledge belong to?"""
-    PRE_2024 = "Pre-2024"
-    TRANSITION_2024_2026 = "2024-2026"
-    CURRENT_2026_PLUS = "2026+"
+# --------------------------------------------------------------------------- #
+# Exceptions                                                                   #
+# --------------------------------------------------------------------------- #
+
+class SchemaError(Exception):
+    """Base class for all DEEPCORE schema errors."""
 
 
-class SourceTier(int, Enum):
-    """Source credibility tier (used by generation system prompt)."""
-    PEER_REVIEWED = 1      # arXiv papers, academic journals
-    EMPIRICAL = 2           # GitHub implementations, official docs, books
-    PRACTITIONER = 3        # Reddit, HN, Stack Overflow, YouTube
+class LicenseViolationError(SchemaError):
+    """Raised when content carries a license that forbids commercial use.
 
-
-class Difficulty(str, Enum):
-    """Content difficulty level."""
-    BASIC = "basic"
-    INTERMEDIATE = "intermediate"
-    ADVANCED = "advanced"
-
-
-class ComputeTier(str, Enum):
-    """Compute intensity for reproducing this technique."""
-    C0 = "C0"  # CPU only, seconds
-    C1 = "C1"  # CPU, minutes
-    C2 = "C2"  # Single GPU, minutes
-    C3 = "C3"  # Single GPU, hours
-    C4 = "C4"  # Multi-GPU, hours
-    C5 = "C5"  # Cluster, days
-
-
-# ── Profile Dataclasses ───────────────────────────────────────────────────────
-
-@dataclass
-class EpistemicProfile:
-    """How trustworthy and well-supported is this knowledge?
-
-    This is the most important profile — it drives how SynthForge weights
-    retrieved content during generation.
+    DeepForge charges users, so any non-commercial (CC *-NC-*), proprietary, or
+    unknown license is rejected at construction time (fail closed).
     """
-    evidence_strength: EvidenceStrength = EvidenceStrength.MODERATE
-    reproducibility: ReproducibilityStatus = ReproducibilityStatus.UNKNOWN
-    contradiction_status: ContradictionStatus = ContradictionStatus.CONSISTENT
-    confidence_label: ConfidenceLabel = ConfidenceLabel.EMERGING
-    negative_evidence: list[str] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        """Serialise to flat dict for ChromaDB metadata storage."""
-        return {
-            "epistemic_evidence_strength": self.evidence_strength.value,
-            "epistemic_reproducibility": self.reproducibility.value,
-            "epistemic_contradiction": self.contradiction_status.value,
-            "epistemic_confidence": self.confidence_label.value,
-        }
 
 
-@dataclass
-class TemporalProfile:
-    """How fresh and time-sensitive is this knowledge?"""
-    knowledge_half_life: KnowledgeHalfLife = KnowledgeHalfLife.MEDIUM
-    era: KnowledgeEra = KnowledgeEra.TRANSITION_2024_2026
-    last_verified: Optional[str] = None      # YYYY-MM-DD
-    next_review_suggested: Optional[str] = None  # YYYY-MM-DD
-
-    def to_dict(self) -> dict:
-        return {
-            "temporal_half_life": self.knowledge_half_life.value,
-            "temporal_era": self.era.value,
-            "temporal_last_verified": self.last_verified or "",
-        }
+class ChromaMetadataError(SchemaError):
+    """Raised when (de)serialising to/from ChromaDB-safe primitive metadata."""
 
 
-@dataclass
-class ResourceProfile:
-    """What compute/data resources are needed to apply this knowledge?"""
-    compute_tier: ComputeTier = ComputeTier.C1
-    low_resource_friendly: bool = True
-    energy_sensitivity: str = "Low"
-    latency_profile: str = ""
-
-    def to_dict(self) -> dict:
-        return {
-            "resource_compute_tier": self.compute_tier.value,
-            "resource_low_resource_friendly": str(self.low_resource_friendly),
-        }
+class UnknownForgeDomainError(SchemaError):
+    """Raised when a ``ForgeDomain`` has no registered metadata model."""
 
 
-@dataclass
-class CrossForgeEdge:
-    """A relationship between this chunk and content in another Forge."""
-    target_forge: str           # e.g. "MLForge", "MathForge"
-    relationship: str           # e.g. "DEPENDS_ON", "IMPLEMENTS", "EXTENDS"
-    target_concept: str         # e.g. "Gradient Descent"
-    description: str = ""
+class ChunkIntegrityError(SchemaError):
+    """Raised when a chunk's declared domain and metadata disagree."""
 
 
-# ── Master Chunk Schema ───────────────────────────────────────────────────────
+# --------------------------------------------------------------------------- #
+# Layer 0 -- Primitive enumerations                                           #
+# --------------------------------------------------------------------------- #
 
-@dataclass
-class DeepForgeChunk:
-    """Universal Knowledge Object for all DeepForge corpora.
+class SourceType(str, Enum):
+    """Origin of a document. Extend as new ingestion sources are added."""
 
-    This is the single source of truth for what a chunk looks like
-    across all 24 Forges. Every ingestion pipeline must produce chunks
-    conforming to this schema.
+    YOUTUBE = "youtube"
+    ARXIV = "arxiv"
+    REDDIT = "reddit"
+    GITHUB = "github"
+    BOOK = "book"
+    RSS = "rss"
+    HACKERNEWS = "hackernews"
+    STACKOVERFLOW = "stackoverflow"
+    LESSWRONG = "lesswrong"
+    DOCUMENTATION = "documentation"
+    OTHER = "other"
 
-    The chunk_id is the SHA-256 hash of the text content — this makes
-    ingestion resume-safe and deduplication trivial.
 
-    Args:
-        text: The actual text content of this chunk.
-        source: Data source identifier (e.g. 'arxiv', 'reddit', 'github').
-        forge: Which Forge this belongs to (e.g. 'SynthForge', 'MLForge').
-        chunk_id: SHA-256 of text (auto-computed if not provided).
+class ContentType(str, Enum):
+    """The form of the content, independent of its source."""
+
+    PAPER = "paper"
+    CODE = "code"
+    VIDEO_TRANSCRIPT = "video_transcript"
+    FORUM_POST = "forum_post"
+    DOCUMENTATION = "documentation"
+    BOOK_EXCERPT = "book_excerpt"
+    ARTICLE = "article"
+    OTHER = "other"
+
+
+class CredibilityTier(str, Enum):
+    """Source hierarchy the generation layer reads to weight evidence.
+
+    Tier 1 outranks Tier 2 outranks Tier 3 when sources conflict.
     """
-    # Required fields
-    text: str
-    source: str
-    forge: str = "SynthForge"
 
-    # Auto-computed
-    chunk_id: str = field(default="")
+    TIER_1_PRIMARY = "tier_1_primary"                # peer-reviewed / primary
+    TIER_2_IMPLEMENTATION = "tier_2_implementation"  # official docs / code
+    TIER_3_COMMUNITY = "tier_3_community"            # practitioner / forum
 
-    # Taxonomy
-    difficulty: Difficulty = Difficulty.INTERMEDIATE
-    category: str = ""
-    topic_tags: list[str] = field(default_factory=list)
 
-    # Source metadata
+class License(str, Enum):
+    """Content license. Commercial usability is derived, not stored.
+
+    ``UNKNOWN`` is treated as commercially prohibited (fail closed): if a
+    license cannot be proven to permit commercial use, the content must not be
+    monetised.
+    """
+
+    PUBLIC_DOMAIN = "public_domain"
+    CC0 = "cc0"
+    CC_BY = "cc_by"
+    CC_BY_SA = "cc_by_sa"
+    CC_BY_ND = "cc_by_nd"
+    CC_BY_NC = "cc_by_nc"
+    CC_BY_NC_SA = "cc_by_nc_sa"
+    CC_BY_NC_ND = "cc_by_nc_nd"
+    MIT = "mit"
+    APACHE_2_0 = "apache_2_0"
+    BSD_3_CLAUSE = "bsd_3_clause"
+    GPL_3_0 = "gpl_3_0"
+    PROPRIETARY = "proprietary"
+    UNKNOWN = "unknown"
+
+    @property
+    def allows_commercial_use(self) -> bool:
+        """Whether this license permits the commercial use DeepForge requires."""
+        return self not in COMMERCIAL_USE_PROHIBITED_LICENSES
+
+
+# Licenses incompatible with a paid product. NC = non-commercial clause;
+# PROPRIETARY and UNKNOWN are rejected by default (fail closed). ND (no
+# derivatives) is *not* gated here -- chunking/synthesis raises a separate
+# derivative-rights question to revisit per source.
+COMMERCIAL_USE_PROHIBITED_LICENSES: "frozenset[License]" = frozenset(
+    {
+        License.CC_BY_NC,
+        License.CC_BY_NC_SA,
+        License.CC_BY_NC_ND,
+        License.PROPRIETARY,
+        License.UNKNOWN,
+    }
+)
+
+
+class UncertaintyLevel(str, Enum):
+    """Confidence tier for a synthesised claim. Reserved for the L4 contract."""
+
+    WELL_ESTABLISHED = "well_established"  # replicated, broad consensus
+    EMERGING = "emerging"                  # solid but context-dependent
+    SPECULATIVE = "speculative"            # community claim, no strong evidence
+
+
+class ForgeDomain(str, Enum):
+    """Which Forge owns a record. Grows as domains are added to DeepForge."""
+
+    PROMPT_ENGINEERING = "prompt_engineering"  # SynthForge (ground-zero Forge)
+    CODE = "code"                              # CodeForge (planned)
+    MATH = "math"                              # MathForge (planned)
+    MACHINE_LEARNING = "machine_learning"      # MLForge (planned)
+
+
+# --------------------------------------------------------------------------- #
+# Layer 1 -- Ingestion contract                                               #
+# --------------------------------------------------------------------------- #
+
+class RawDocument(BaseModel):
+    """A single source document, validated as it enters the pipeline.
+
+    This is the output every ingestor must produce before chunking. The
+    commercial-license gate is enforced here so prohibited content is rejected
+    at the earliest possible point; ingestors should construct ``RawDocument``
+    inside a ``try/except LicenseViolationError`` to skip-and-log gracefully.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    document_id: str = Field(..., min_length=1)
+    source_type: SourceType
+    content_type: ContentType
+    source_url: str = Field(..., min_length=1)
     title: str = ""
-    author: str = ""
-    url: str = ""
-    date: str = ""
-    credibility_tier: SourceTier = SourceTier.EMPIRICAL
+    author: Optional[str] = None
+    published_at: Optional[datetime] = None
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    license: License
+    credibility_tier: CredibilityTier
+    domain: ForgeDomain
+    language: str = "en"
+    raw_content: str = Field(..., min_length=1)
+    # Free-form source provenance (ChromaDB-safe primitives only). Permissive
+    # by design -- kept loose at the document level.
+    source_metadata: dict[str, Union[str, int, float, bool]] = Field(
+        default_factory=dict
+    )
 
-    # Quality profiles
-    epistemic: EpistemicProfile = field(default_factory=EpistemicProfile)
-    temporal: TemporalProfile = field(default_factory=TemporalProfile)
-    resource: ResourceProfile = field(default_factory=ResourceProfile)
+    @model_validator(mode="after")
+    def _enforce_commercial_license(self) -> "RawDocument":
+        """Reject content whose license forbids commercial use (fail closed)."""
+        if not self.license.allows_commercial_use:
+            raise LicenseViolationError(
+                f"License '{self.license.value}' forbids commercial use; "
+                f"document '{self.document_id}' rejected from a paid corpus."
+            )
+        return self
 
-    # Cross-forge relationships
-    cross_forge_edges: list[CrossForgeEdge] = field(default_factory=list)
+    @staticmethod
+    def compute_document_id(source_url: str) -> str:
+        """Deterministic id from the source URL (idempotent re-ingestion)."""
+        digest = hashlib.new(_HASH_ALGORITHM)
+        digest.update(source_url.encode(_HASH_ENCODING))
+        return digest.hexdigest()
 
-    # Forge-specific extension (JSON string for ChromaDB storage)
-    forge_extension: str = ""
+    @classmethod
+    def create(
+        cls,
+        *,
+        source_type: SourceType,
+        content_type: ContentType,
+        source_url: str,
+        raw_content: str,
+        license: License,
+        credibility_tier: CredibilityTier,
+        domain: ForgeDomain,
+        title: str = "",
+        author: Optional[str] = None,
+        published_at: Optional[datetime] = None,
+        language: str = "en",
+        source_metadata: Optional[dict[str, Union[str, int, float, bool]]] = None,
+    ) -> "RawDocument":
+        """Construct a document with a deterministic id derived from its URL."""
+        return cls(
+            document_id=cls.compute_document_id(source_url),
+            source_type=source_type,
+            content_type=content_type,
+            source_url=source_url,
+            raw_content=raw_content,
+            license=license,
+            credibility_tier=credibility_tier,
+            domain=domain,
+            title=title,
+            author=author,
+            published_at=published_at,
+            language=language,
+            source_metadata=source_metadata or {},
+        )
 
-    def __post_init__(self) -> None:
-        """Auto-compute chunk_id from text if not provided."""
-        if not self.chunk_id:
-            self.chunk_id = hashlib.sha256(
-                self.text.encode("utf-8")
-            ).hexdigest()
 
-    def to_chromadb_metadata(self) -> dict:
-        """Serialise to flat dict suitable for ChromaDB metadata storage.
+# --------------------------------------------------------------------------- #
+# Layer 2 -- Domain metadata (closed base, open extension via registry)       #
+# --------------------------------------------------------------------------- #
 
-        ChromaDB metadata values must be str, int, float, or bool.
-        Nested objects are flattened with prefix notation.
+class BaseDomainMeta(BaseModel):
+    """Base class for per-Forge, strongly-typed chunk metadata.
 
-        Returns:
-            Flat dict of metadata fields.
+    Each Forge subclasses this and registers it with ``@register_domain_meta``.
+    ``extra='allow'`` keeps the shape permissive while a domain is still
+    settling; tighten an individual subclass to ``extra='forbid'`` once its
+    fields stabilise.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    forge: ForgeDomain
+
+
+class DomainMetaRegistry:
+    """Maps each ``ForgeDomain`` to its ``BaseDomainMeta`` subclass.
+
+    This registry is the extension point that keeps ``Chunk`` a closed, single
+    type: adding a Forge registers a metadata class here instead of editing
+    ``Chunk`` or a hard-coded union.
+    """
+
+    _registry: ClassVar[dict[ForgeDomain, type[BaseDomainMeta]]] = {}
+
+    @classmethod
+    def register(cls, domain: ForgeDomain, meta_cls: type[BaseDomainMeta]) -> None:
+        """Register ``meta_cls`` as the metadata model for ``domain``."""
+        existing = cls._registry.get(domain)
+        if existing is not None and existing is not meta_cls:
+            raise SchemaError(
+                f"ForgeDomain '{domain.value}' is already registered to "
+                f"{existing.__name__}; refusing to rebind to {meta_cls.__name__}."
+            )
+        cls._registry[domain] = meta_cls
+
+    @classmethod
+    def get(cls, domain: ForgeDomain) -> type[BaseDomainMeta]:
+        """Return the metadata model registered for ``domain``."""
+        try:
+            return cls._registry[domain]
+        except KeyError as exc:
+            raise UnknownForgeDomainError(
+                f"No metadata model registered for ForgeDomain '{domain.value}'. "
+                f"Register one with @register_domain_meta."
+            ) from exc
+
+    @classmethod
+    def is_registered(cls, domain: ForgeDomain) -> bool:
+        """Whether ``domain`` has a registered metadata model."""
+        return domain in cls._registry
+
+
+def register_domain_meta(domain: ForgeDomain):
+    """Class decorator registering a ``BaseDomainMeta`` subclass for ``domain``."""
+
+    def _decorator(meta_cls: type[BaseDomainMeta]) -> type[BaseDomainMeta]:
+        if not issubclass(meta_cls, BaseDomainMeta):
+            raise SchemaError(
+                f"{meta_cls.__name__} must subclass BaseDomainMeta to be "
+                f"registered as domain metadata."
+            )
+        DomainMetaRegistry.register(domain, meta_cls)
+        return meta_cls
+
+    return _decorator
+
+
+@register_domain_meta(ForgeDomain.PROMPT_ENGINEERING)
+class SynthForgeMeta(BaseDomainMeta):
+    """Prompt-engineering metadata (SynthForge -- the ground-zero Forge).
+
+    Permissive phase: every domain-specific field is optional so chunks can be
+    populated partially while the prompt-engineering schema settles. Tighten to
+    ``extra='forbid'`` and required fields as the domain stabilises.
+    """
+
+    forge: ForgeDomain = ForgeDomain.PROMPT_ENGINEERING
+    technique_tags: list[str] = Field(default_factory=list)
+    prompt_pattern: Optional[str] = None
+    target_model_family: Optional[str] = None
+    task_category: Optional[str] = None
+
+    # Bibliographic citation (schema 0.2.0). Optional and additive: populated for
+    # book/paper/doc sources, ``None`` elsewhere. Flatten/reconstruct is generic
+    # (iterates model fields / ``meta_*`` keys), so these round-trip automatically.
+    isbn: Optional[str] = None
+    publisher: Optional[str] = None
+    edition: Optional[str] = None
+    doi: Optional[str] = None
+    page_start: Optional[int] = None
+    chapter: Optional[str] = None
+
+
+# --------------------------------------------------------------------------- #
+# Internal helpers                                                             #
+# --------------------------------------------------------------------------- #
+
+def _is_list_field(annotation: Any) -> bool:
+    """Whether a Pydantic field annotation is a (possibly optional) list type."""
+    origin = get_origin(annotation)
+    if origin is list:
+        return True
+    union_type = getattr(types, "UnionType", None)
+    if origin is Union or (union_type is not None and origin is union_type):
+        return any(_is_list_field(arg) for arg in get_args(annotation))
+    return False
+
+
+# --------------------------------------------------------------------------- #
+# Layer 2 -- Processing contract                                              #
+# --------------------------------------------------------------------------- #
+
+class Chunk(BaseModel):
+    """A retrievable unit of a document, stored in the shared vector store.
+
+    A ``Chunk`` is immutable: its ``chunk_id`` is a deterministic hash of its
+    content, so mutating it would invalidate its identity. Document-level fields
+    (source, license, credibility, domain, provenance) are denormalised onto
+    every chunk so the vector store can filter on them without a join.
+
+    The embedding vector itself is NOT stored here -- ChromaDB owns it; only the
+    embedding model name is recorded for provenance.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    chunk_id: str = Field(..., min_length=1)
+    document_id: str = Field(..., min_length=1)
+    chunk_index: int = Field(..., ge=0)
+    text: str = Field(..., min_length=1)
+    token_count: int = Field(..., ge=0)
+
+    # Denormalised document context (for metadata filtering at retrieval time).
+    source_type: SourceType
+    content_type: ContentType
+    credibility_tier: CredibilityTier
+    license: License
+    domain: ForgeDomain
+    source_url: str = Field(..., min_length=1)
+    title: Optional[str] = None
+    author: Optional[str] = None
+    published_at: Optional[datetime] = None
+
+    # Generic, domain-agnostic enrichment.
+    topic_tags: list[str] = Field(default_factory=list)
+    quality_score: Optional[int] = Field(default=None, ge=0, le=MAX_QUALITY_SCORE)
+    embedding_model: Optional[str] = None
+
+    # Strongly-typed, per-Forge metadata (validated against the registry).
+    domain_metadata: BaseDomainMeta
+
+    @model_validator(mode="after")
+    def _enforce_commercial_license(self) -> "Chunk":
+        """Reject chunks whose license forbids commercial use (fail closed).
+
+        Also surfaces prohibited content already in the store when a chunk is
+        reconstructed via ``from_chroma_metadata`` -- such content fails loudly
+        so it can be purged.
         """
-        meta = {
-            # Core
-            "source": self.source,
-            "forge": self.forge,
-            "difficulty": self.difficulty.value,
-            "category": self.category,
-            "title": self.title,
-            "author": self.author,
-            "url": self.url,
-            "date": self.date,
-            "credibility_tier": int(self.credibility_tier),
-            # Profiles
-            **self.epistemic.to_dict(),
-            **self.temporal.to_dict(),
-            **self.resource.to_dict(),
-            # Extension
-            "forge_extension": self.forge_extension,
-        }
-        # Remove empty strings to keep metadata lean
-        return {k: v for k, v in meta.items() if v != "" and v is not None}
+        if not self.license.allows_commercial_use:
+            raise LicenseViolationError(
+                f"License '{self.license.value}' forbids commercial use; "
+                f"chunk '{self.chunk_id}' rejected from a paid corpus."
+            )
+        return self
 
-    def to_jsonl_dict(self) -> dict:
-        """Serialise to dict suitable for JSONL storage.
+    @model_validator(mode="after")
+    def _enforce_domain_metadata_integrity(self) -> "Chunk":
+        """Ensure declared domain and attached metadata agree with the registry."""
+        if self.domain_metadata.forge != self.domain:
+            raise ChunkIntegrityError(
+                f"Chunk domain '{self.domain.value}' disagrees with metadata "
+                f"forge '{self.domain_metadata.forge.value}'."
+            )
+        expected_cls = DomainMetaRegistry.get(self.domain)
+        if not isinstance(self.domain_metadata, expected_cls):
+            raise ChunkIntegrityError(
+                f"Chunk domain '{self.domain.value}' expects metadata type "
+                f"{expected_cls.__name__}, got "
+                f"{type(self.domain_metadata).__name__}."
+            )
+        return self
 
-        Returns:
-            Full dict including nested objects.
+    @staticmethod
+    def compute_chunk_id(document_id: str, chunk_index: int, text: str) -> str:
+        """Deterministic id over (document_id, chunk_index, text).
+
+        Identical inputs always yield the same id, making re-ingestion after an
+        interruption idempotent (resume-safety).
         """
-        d = {
-            "chunk_id": self.chunk_id,
-            "text": self.text,
-            "source": self.source,
-            "forge": self.forge,
-            "difficulty": self.difficulty.value,
-            "category": self.category,
-            "topic_tags": self.topic_tags,
-            "title": self.title,
-            "author": self.author,
-            "url": self.url,
-            "date": self.date,
-            "credibility_tier": int(self.credibility_tier),
-            "epistemic": asdict(self.epistemic),
-            "temporal": asdict(self.temporal),
-            "resource": asdict(self.resource),
+        digest = hashlib.new(_HASH_ALGORITHM)
+        digest.update(
+            f"{document_id}:{chunk_index}:{text}".encode(_HASH_ENCODING)
+        )
+        return digest.hexdigest()
+
+    @classmethod
+    def from_document(
+        cls,
+        document: RawDocument,
+        *,
+        text: str,
+        chunk_index: int,
+        token_count: int,
+        domain_metadata: BaseDomainMeta,
+        topic_tags: Optional[list[str]] = None,
+        quality_score: Optional[int] = None,
+        embedding_model: Optional[str] = None,
+    ) -> "Chunk":
+        """Build a chunk, inheriting document context and computing its id."""
+        return cls(
+            chunk_id=cls.compute_chunk_id(document.document_id, chunk_index, text),
+            document_id=document.document_id,
+            chunk_index=chunk_index,
+            text=text,
+            token_count=token_count,
+            source_type=document.source_type,
+            content_type=document.content_type,
+            credibility_tier=document.credibility_tier,
+            license=document.license,
+            domain=document.domain,
+            source_url=document.source_url,
+            title=document.title or None,
+            author=document.author,
+            published_at=document.published_at,
+            topic_tags=topic_tags or [],
+            quality_score=quality_score,
+            embedding_model=embedding_model,
+            domain_metadata=domain_metadata,
+        )
+
+    def to_chroma_metadata(self) -> dict[str, Union[str, int, float, bool]]:
+        """Flatten to a ChromaDB-safe metadata dict (primitives only).
+
+        The chunk ``text`` is NOT included -- store it in ChromaDB's
+        ``documents`` and ``chunk_id`` in ``ids``. Lists become delimiter-joined
+        strings; enums become their values; datetimes become ISO-8601 strings;
+        ``None`` values are omitted (ChromaDB cannot store null).
+        """
+        metadata: dict[str, Union[str, int, float, bool]] = {
+            "schema_version": SCHEMA_VERSION,
+            "document_id": self.document_id,
+            "chunk_index": self.chunk_index,
+            "token_count": self.token_count,
+            "source_type": self.source_type.value,
+            "content_type": self.content_type.value,
+            "credibility_tier": self.credibility_tier.value,
+            "license": self.license.value,
+            "domain": self.domain.value,
+            "source_url": self.source_url,
         }
-        return d
+        if self.title is not None:
+            metadata["title"] = self.title
+        if self.author is not None:
+            metadata["author"] = self.author
+        if self.published_at is not None:
+            metadata["published_at"] = self.published_at.isoformat()
+        if self.topic_tags:
+            metadata["topic_tags"] = CHROMA_LIST_DELIMITER.join(self.topic_tags)
+        if self.quality_score is not None:
+            metadata["quality_score"] = self.quality_score
+        if self.embedding_model is not None:
+            metadata["embedding_model"] = self.embedding_model
+
+        metadata.update(self._flatten_domain_metadata())
+        return metadata
+
+    def _flatten_domain_metadata(self) -> dict[str, Union[str, int, float, bool]]:
+        """Flatten domain metadata to prefixed, ChromaDB-safe primitives."""
+        flat: dict[str, Union[str, int, float, bool]] = {}
+        for name, value in self.domain_metadata.model_dump().items():
+            if value is None:
+                continue
+            if isinstance(value, Enum):
+                value = value.value
+            key = f"{CHROMA_META_PREFIX}{name}"
+            if isinstance(value, list):
+                if not all(
+                    isinstance(item, (str, int, float, bool)) for item in value
+                ):
+                    raise ChromaMetadataError(
+                        f"Domain metadata field '{name}' contains non-primitive "
+                        f"list items; cannot store in ChromaDB."
+                    )
+                flat[key] = CHROMA_LIST_DELIMITER.join(str(item) for item in value)
+            elif isinstance(value, (str, int, float, bool)):
+                flat[key] = value
+            else:
+                raise ChromaMetadataError(
+                    f"Domain metadata field '{name}' has non-primitive type "
+                    f"{type(value).__name__}; ChromaDB metadata must be flat."
+                )
+        return flat
+
+    @classmethod
+    def from_chroma_metadata(
+        cls,
+        *,
+        chunk_id: str,
+        text: str,
+        metadata: dict[str, Any],
+    ) -> "Chunk":
+        """Rebuild a ``Chunk`` from its ChromaDB id, document text and metadata.
+
+        Inverse of ``to_chroma_metadata``. Uses the stored ``domain`` to look up
+        the correct metadata model in the registry and reconstruct typed
+        ``domain_metadata``, splitting delimiter-joined list fields back into
+        lists.
+        """
+        try:
+            domain = ForgeDomain(metadata["domain"])
+        except KeyError as exc:
+            raise ChromaMetadataError(
+                "ChromaDB metadata is missing required key 'domain'."
+            ) from exc
+        except ValueError as exc:
+            raise ChromaMetadataError(
+                f"Unrecognised ForgeDomain '{metadata.get('domain')}' in metadata."
+            ) from exc
+
+        meta_cls = DomainMetaRegistry.get(domain)
+        domain_metadata = cls._rebuild_domain_metadata(meta_cls, metadata)
+
+        published_at_raw = metadata.get("published_at")
+        published_at = (
+            datetime.fromisoformat(published_at_raw)
+            if isinstance(published_at_raw, str)
+            else None
+        )
+        topic_tags_raw = metadata.get("topic_tags")
+        topic_tags = (
+            topic_tags_raw.split(CHROMA_LIST_DELIMITER)
+            if isinstance(topic_tags_raw, str) and topic_tags_raw
+            else []
+        )
+        quality_score_raw = metadata.get("quality_score")
+        quality_score = (
+            int(quality_score_raw) if quality_score_raw is not None else None
+        )
+
+        try:
+            return cls(
+                chunk_id=chunk_id,
+                document_id=metadata["document_id"],
+                chunk_index=int(metadata["chunk_index"]),
+                text=text,
+                token_count=int(metadata["token_count"]),
+                source_type=SourceType(metadata["source_type"]),
+                content_type=ContentType(metadata["content_type"]),
+                credibility_tier=CredibilityTier(metadata["credibility_tier"]),
+                license=License(metadata["license"]),
+                domain=domain,
+                source_url=metadata["source_url"],
+                title=metadata.get("title"),
+                author=metadata.get("author"),
+                published_at=published_at,
+                topic_tags=topic_tags,
+                quality_score=quality_score,
+                embedding_model=metadata.get("embedding_model"),
+                domain_metadata=domain_metadata,
+            )
+        except KeyError as exc:
+            raise ChromaMetadataError(
+                f"ChromaDB metadata is missing required key: {exc}."
+            ) from exc
+
+    @staticmethod
+    def _rebuild_domain_metadata(
+        meta_cls: type[BaseDomainMeta], metadata: dict[str, Any]
+    ) -> BaseDomainMeta:
+        """Reconstruct typed domain metadata from prefixed primitive keys."""
+        fields: dict[str, Any] = {}
+        for raw_key, value in metadata.items():
+            if not raw_key.startswith(CHROMA_META_PREFIX):
+                continue
+            name = raw_key[len(CHROMA_META_PREFIX):]
+            field = meta_cls.model_fields.get(name)
+            if field is not None and _is_list_field(field.annotation):
+                fields[name] = (
+                    value.split(CHROMA_LIST_DELIMITER)
+                    if isinstance(value, str) and value
+                    else []
+                )
+            else:
+                fields[name] = value
+        try:
+            return meta_cls(**fields)
+        except (pydantic.ValidationError, ValueError, TypeError) as exc:
+            raise ChromaMetadataError(
+                f"Failed to rebuild {meta_cls.__name__} from metadata: {exc}."
+            ) from exc
 
 
-# ── Forge-Specific Extension Profiles ────────────────────────────────────────
+# --------------------------------------------------------------------------- #
+# Self-test (run: python schemas.py)                                          #
+# --------------------------------------------------------------------------- #
 
-@dataclass
-class SynthForgeExtension:
-    """Extension profile for SynthForge (Prompt Engineering)."""
-    token_efficiency: float = 0.0
-    injection_risk: str = "Low"           # Low / Medium / High
-    model_compatibility: list[str] = field(default_factory=list)
-    delimiter_sensitivity: list[str] = field(default_factory=list)
-    structured_output_support: bool = False
-    prompt_pattern_type: str = ""         # e.g. chain-of-thought, few-shot
-
-
-@dataclass
-class MLForgeExtension:
-    """Extension profile for MLForge (Machine Learning)."""
-    compute_bracket: str = ""
-    benchmark_references: list[str] = field(default_factory=list)
-    hardware_mapping: list[str] = field(default_factory=list)
-    training_vs_inference: str = "Both"   # Training / Inference / Both
-    quantization_compatible: bool = True
-
-
-@dataclass
-class MathForgeExtension:
-    """Extension profile for MathForge (Mathematics)."""
-    axiomatic_dependencies: list[str] = field(default_factory=list)
-    proof_complexity: str = "Medium"       # Low / Medium / High
-    formal_verification_status: str = "Unverified"
-    computational_complexity: str = ""    # Big-O notation
-
-
-@dataclass
-class CodeForgeExtension:
-    """Extension profile for CodeForge (Software Engineering)."""
-    language_support: list[str] = field(default_factory=list)
-    framework_versions: list[str] = field(default_factory=list)
-    test_coverage: float = 0.0
-    reproducibility_score: float = 0.0
-
-
-# ── Factory Functions ─────────────────────────────────────────────────────────
-
-def chunk_from_arxiv(
-    text: str,
-    title: str,
-    authors: str,
-    arxiv_id: str,
-    date: str,
-    forge: str = "SynthForge",
-) -> DeepForgeChunk:
-    """Create a DeepForgeChunk from an arXiv paper.
-
-    Args:
-        text: Chunk text content.
-        title: Paper title.
-        authors: Comma-separated author names.
-        arxiv_id: arXiv ID (e.g. '2305.12345').
-        date: Publication date (YYYY-MM-DD).
-        forge: Target Forge name.
-
-    Returns:
-        DeepForgeChunk with arXiv-appropriate metadata.
-    """
-    return DeepForgeChunk(
-        text=text,
-        source="arxiv",
-        forge=forge,
-        title=title,
-        author=authors,
-        url=f"https://arxiv.org/abs/{arxiv_id}",
-        date=date,
-        credibility_tier=SourceTier.PEER_REVIEWED,
-        epistemic=EpistemicProfile(
-            evidence_strength=EvidenceStrength.STRONG,
-            reproducibility=ReproducibilityStatus.UNKNOWN,
-            confidence_label=ConfidenceLabel.EMERGING,
-        ),
-        temporal=TemporalProfile(
-            knowledge_half_life=KnowledgeHalfLife.MEDIUM,
-            era=_date_to_era(date),
-        ),
+def _self_test() -> None:
+    """Round-trip self-test: construct -> flatten -> reconstruct -> assert."""
+    document = RawDocument.create(
+        source_type=SourceType.ARXIV,
+        content_type=ContentType.PAPER,
+        source_url="https://arxiv.org/abs/2201.11903",
+        raw_content="Chain-of-thought prompting elicits reasoning in LLMs.",
+        license=License.CC_BY,
+        credibility_tier=CredibilityTier.TIER_1_PRIMARY,
+        domain=ForgeDomain.PROMPT_ENGINEERING,
+        title="Chain-of-Thought Prompting",
+        author="Wei et al.",
     )
 
-
-def chunk_from_reddit(
-    text: str,
-    subreddit: str,
-    post_id: str,
-    author: str,
-    score: int,
-    date: str,
-    permalink: str,
-    forge: str = "SynthForge",
-) -> DeepForgeChunk:
-    """Create a DeepForgeChunk from a Reddit post or comment.
-
-    Args:
-        text: Post or comment text.
-        subreddit: Subreddit name without r/ prefix.
-        post_id: Reddit post ID.
-        author: Reddit username.
-        score: Upvote score.
-        date: Post date (YYYY-MM-DD).
-        permalink: Full Reddit URL.
-        forge: Target Forge name.
-
-    Returns:
-        DeepForgeChunk with Reddit-appropriate metadata.
-    """
-    return DeepForgeChunk(
-        text=text,
-        source="reddit",
-        forge=forge,
-        title=f"r/{subreddit} post {post_id}",
-        author=author,
-        url=permalink,
-        date=date,
-        credibility_tier=SourceTier.PRACTITIONER,
-        epistemic=EpistemicProfile(
-            evidence_strength=EvidenceStrength.ANECDOTAL,
-            confidence_label=ConfidenceLabel.LIMITED_EVIDENCE,
+    chunk = Chunk.from_document(
+        document,
+        text="Few-shot chain-of-thought outperforms zero-shot on multi-step tasks.",
+        chunk_index=0,
+        token_count=12,
+        domain_metadata=SynthForgeMeta(
+            technique_tags=["chain_of_thought", "few_shot"],
+            prompt_pattern="reasoning",
+            task_category="arithmetic",
         ),
-        temporal=TemporalProfile(
-            knowledge_half_life=KnowledgeHalfLife.SHORT,
-            era=_date_to_era(date),
-        ),
+        topic_tags=["reasoning", "prompting"],
+        quality_score=5,
+        embedding_model="bge-large-en-v1.5",
     )
 
+    metadata = chunk.to_chroma_metadata()
+    assert all(
+        isinstance(v, (str, int, float, bool)) for v in metadata.values()
+    ), "ChromaDB metadata must contain only primitives."
 
-def chunk_from_github(
-    text: str,
-    repo_name: str,
-    file_path: str,
-    url: str,
-    date: str,
-    forge: str = "SynthForge",
-) -> DeepForgeChunk:
-    """Create a DeepForgeChunk from a GitHub repository file.
-
-    Args:
-        text: File content chunk.
-        repo_name: Repository name (e.g. 'owner/repo').
-        file_path: Path to file within repository.
-        url: Direct URL to file.
-        date: Last commit date (YYYY-MM-DD).
-        forge: Target Forge name.
-
-    Returns:
-        DeepForgeChunk with GitHub-appropriate metadata.
-    """
-    return DeepForgeChunk(
-        text=text,
-        source="github",
-        forge=forge,
-        title=f"{repo_name}: {file_path}",
-        url=url,
-        date=date,
-        credibility_tier=SourceTier.EMPIRICAL,
-        epistemic=EpistemicProfile(
-            evidence_strength=EvidenceStrength.MODERATE,
-            confidence_label=ConfidenceLabel.EMERGING,
-        ),
-        temporal=TemporalProfile(
-            knowledge_half_life=KnowledgeHalfLife.MEDIUM,
-            era=_date_to_era(date),
-        ),
+    restored = Chunk.from_chroma_metadata(
+        chunk_id=chunk.chunk_id, text=chunk.text, metadata=metadata
     )
+    assert restored == chunk, "Round-trip mismatch between chunk and restored."
+    assert isinstance(restored.domain_metadata, SynthForgeMeta)
+    assert restored.domain_metadata.technique_tags == [
+        "chain_of_thought",
+        "few_shot",
+    ]
 
-
-def chunk_from_youtube(
-    text: str,
-    video_id: str,
-    title: str,
-    channel: str,
-    date: str,
-    forge: str = "SynthForge",
-) -> DeepForgeChunk:
-    """Create a DeepForgeChunk from a YouTube transcript.
-
-    Args:
-        text: Transcript chunk text.
-        video_id: YouTube video ID.
-        title: Video title.
-        channel: Channel name.
-        date: Upload date (YYYY-MM-DD).
-        forge: Target Forge name.
-
-    Returns:
-        DeepForgeChunk with YouTube-appropriate metadata.
-    """
-    return DeepForgeChunk(
-        text=text,
-        source="youtube",
-        forge=forge,
-        title=title,
-        author=channel,
-        url=f"https://youtube.com/watch?v={video_id}",
-        date=date,
-        credibility_tier=SourceTier.PRACTITIONER,
-        epistemic=EpistemicProfile(
-            evidence_strength=EvidenceStrength.ANECDOTAL,
-            confidence_label=ConfidenceLabel.LIMITED_EVIDENCE,
-        ),
-        temporal=TemporalProfile(
-            knowledge_half_life=KnowledgeHalfLife.SHORT,
-            era=_date_to_era(date),
-        ),
+    # Bibliographic fields (schema 0.2.0) survive the chroma round-trip, and
+    # populated-vs-omitted optionals reconstruct correctly.
+    book = RawDocument.create(
+        source_type=SourceType.BOOK,
+        content_type=ContentType.BOOK_EXCERPT,
+        source_url="https://example.org/books/prompting-handbook#p42",
+        raw_content="A worked example of few-shot prompting from the handbook.",
+        license=License.CC_BY_SA,
+        credibility_tier=CredibilityTier.TIER_2_IMPLEMENTATION,
+        domain=ForgeDomain.PROMPT_ENGINEERING,
+        title="The Prompting Handbook",
+        author="A. Author",
     )
+    book_chunk = Chunk.from_document(
+        book,
+        text="Few-shot exemplars should be representative of the target task.",
+        chunk_index=41,
+        token_count=11,
+        domain_metadata=SynthForgeMeta(
+            technique_tags=["few_shot"],
+            isbn="978-1-23456-789-0",
+            publisher="DeepForge Press",
+            edition="2nd",
+            page_start=42,
+            chapter="3",
+            # doi intentionally left None -> must be omitted from chroma, then
+            # reconstruct back to None.
+        ),
+        embedding_model="bge-large-en-v1.5",
+    )
+    book_metadata = book_chunk.to_chroma_metadata()
+    assert "meta_doi" not in book_metadata, "None optional must be omitted from chroma."
+    assert book_metadata["meta_isbn"] == "978-1-23456-789-0"
+    assert book_metadata["meta_page_start"] == 42  # int preserved, not stringified
+    restored_book = Chunk.from_chroma_metadata(
+        chunk_id=book_chunk.chunk_id, text=book_chunk.text, metadata=book_metadata
+    )
+    assert restored_book == book_chunk, "Bibliographic round-trip mismatch."
+    bib = restored_book.domain_metadata
+    assert isinstance(bib, SynthForgeMeta)
+    assert bib.isbn == "978-1-23456-789-0"
+    assert bib.publisher == "DeepForge Press"
+    assert bib.edition == "2nd"
+    assert bib.page_start == 42 and isinstance(bib.page_start, int)
+    assert bib.chapter == "3"
+    assert bib.doi is None, "Omitted optional must reconstruct as None."
 
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _date_to_era(date_str: str) -> KnowledgeEra:
-    """Convert a date string to a KnowledgeEra enum value.
-
-    Args:
-        date_str: Date in YYYY-MM-DD or YYYY format.
-
-    Returns:
-        Appropriate KnowledgeEra value.
-    """
+    # License gate must reject non-commercial content (fail closed).
+    rejected = False
     try:
-        year = int(date_str[:4])
-        if year < 2024:
-            return KnowledgeEra.PRE_2024
-        elif year <= 2025:
-            return KnowledgeEra.TRANSITION_2024_2026
-        else:
-            return KnowledgeEra.CURRENT_2026_PLUS
-    except (ValueError, TypeError):
-        return KnowledgeEra.TRANSITION_2024_2026
+        RawDocument.create(
+            source_type=SourceType.REDDIT,
+            content_type=ContentType.FORUM_POST,
+            source_url="https://reddit.com/r/example/comments/abc",
+            raw_content="A non-commercially licensed post.",
+            license=License.CC_BY_NC,
+            credibility_tier=CredibilityTier.TIER_3_COMMUNITY,
+            domain=ForgeDomain.PROMPT_ENGINEERING,
+        )
+    except LicenseViolationError:
+        rejected = True
+    assert rejected, "License gate failed to reject a CC-BY-NC document."
 
+    # Unknown license is treated as commercially prohibited.
+    assert not License.UNKNOWN.allows_commercial_use, "UNKNOWN must fail closed."
 
-# ── Schema Validation ─────────────────────────────────────────────────────────
+    # Deterministic ids: identical inputs reproduce the same id.
+    assert chunk.chunk_id == Chunk.compute_chunk_id(
+        document.document_id, 0, chunk.text
+    ), "Chunk id is not deterministic."
 
-def validate_chunk(chunk: DeepForgeChunk) -> list[str]:
-    """Validate a DeepForgeChunk and return list of validation errors.
-
-    Args:
-        chunk: Chunk to validate.
-
-    Returns:
-        List of error strings. Empty list means chunk is valid.
-    """
-    errors = []
-    if not chunk.text or len(chunk.text.strip()) < 10:
-        errors.append("text is empty or too short (< 10 chars)")
-    if not chunk.chunk_id or len(chunk.chunk_id) != 64:
-        errors.append("chunk_id must be 64-char SHA-256 hex string")
-    if not chunk.source:
-        errors.append("source is required")
-    if not chunk.forge:
-        errors.append("forge is required")
-    return errors
+    print("schemas.py self-test: PASS")
+    print(f"  schema_version       = {SCHEMA_VERSION}")
+    print(f"  registered domains   = "
+          f"{[d.value for d in ForgeDomain if DomainMetaRegistry.is_registered(d)]}")
+    print(f"  chunk_id             = {chunk.chunk_id[:16]}...")
+    print(f"  chroma metadata keys = {sorted(metadata)}")
 
 
 if __name__ == "__main__":
-    # Self-test
-    print("Testing DeepForge Base Schema...")
-
-    # Test chunk creation
-    chunk = chunk_from_arxiv(
-        text="Chain-of-thought prompting enables language models to perform complex reasoning.",
-        title="Chain-of-Thought Prompting Elicits Reasoning in LLMs",
-        authors="Wei, Jason et al.",
-        arxiv_id="2201.11903",
-        date="2022-01-28",
-    )
-
-    errors = validate_chunk(chunk)
-    assert not errors, f"Validation failed: {errors}"
-    print(f"  chunk_id: {chunk.chunk_id[:16]}...")
-    print(f"  source: {chunk.source}")
-    print(f"  credibility_tier: {chunk.credibility_tier}")
-    print(f"  confidence: {chunk.epistemic.confidence_label.value}")
-
-    meta = chunk.to_chromadb_metadata()
-    print(f"  ChromaDB metadata keys: {list(meta.keys())}")
-    assert "epistemic_confidence" in meta
-    assert "source" in meta
-    assert "credibility_tier" in meta
-
-    # Test Reddit chunk
-    reddit_chunk = chunk_from_reddit(
-        text="I've been using structured XML tags for system prompts and it works much better.",
-        subreddit="PromptEngineering",
-        post_id="abc123",
-        author="u/practitioner",
-        score=150,
-        date="2026-01-15",
-        permalink="https://reddit.com/r/PromptEngineering/comments/abc123",
-    )
-    assert reddit_chunk.credibility_tier == SourceTier.PRACTITIONER
-    print(f"  Reddit chunk tier: {reddit_chunk.credibility_tier}")
-
-    print("\nAll schema tests PASSED.")
-    print(f"\nSchema location: deepforge/core/schemas.py")
-    print("Import with: from deepforge.core.schemas import DeepForgeChunk, chunk_from_arxiv")
+    _self_test()

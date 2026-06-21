@@ -14,6 +14,9 @@ data/
 *.sqlite3
 *.parquet
 
+# --- Migration rollback snapshots (large; created by Phase-6 cutover) ---
+migration/rollback/
+
 # --- Backups, temp, and tool artifacts ---
 *.bak
 *.redact_tmp
