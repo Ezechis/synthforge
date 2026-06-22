@@ -100,9 +100,9 @@ class SynthForgeRetriever:
         self.cross_encoder = CrossEncoder(CROSS_ENCODER_MODEL)
 
         logger.info("Connecting to ChromaDB vector store...")
-        self.chroma_client = chromadb.PersistentClient(
-            path=str(VECTOR_STORE_DIR)
-        )
+        _nested = VECTOR_STORE_DIR / "vector_store"
+        _chroma_path = _nested if (_nested / "chroma.sqlite3").exists() else VECTOR_STORE_DIR
+        self.chroma_client = chromadb.PersistentClient(path=str(_chroma_path))
         self.collection = self.chroma_client.get_collection("synthforge")
 
         logger.info("Building BM25 index...")
